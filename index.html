@@ -266,7 +266,7 @@ let mode = 'gps', mph = store.get('mph', false), pops = store.get('pops', true);
 let ctx = null, node = null, eng = null, wake = null, timer = null;
 // phase: off → check → crank → catch → run → stopping → off
 let phase = 'off', phaseT = 0;
-const veh = { v:0, gear:1, rpm:0, thr:0, brake:0, neutral:false, over:0, liftT:0, cut:0, shiftT:0, cutUntil:0, blipUntil:0, temp:AMBIENT, hunt:0 };
+const veh = { v:0, gear:1, pendG:1, pendT:0, style:0.2, rpm:0, thr:0, brake:0, neutral:false, over:0, liftT:0, cut:0, shiftT:0, cutUntil:0, blipUntil:0, temp:AMBIENT, hunt:0 };
 const pedal = { gas:false, brk:false };
 const running = () => phase !== 'off';
 
@@ -375,20 +375,42 @@ function step(dt, now) {
   veh.over = over ? over * Math.exp(-(now - veh.liftT) / 2500) : 0;
   // throttle opens a bit slower than it closes, like a real drive-by-wire pedal map
   veh.thr += (thr - veh.thr) * Math.min(1, dt * (thr > veh.thr ? 4 : 7));
+  const demand = veh.thr;                    // the driver's throttle; shift decisions ignore the rev-match blip
   if (now < veh.blipUntil) veh.thr = Math.max(veh.thr, 0.55);
 
-  // gear selection; the cold limit also caps the shift points
-  const n = car.gears.length, span = red - car.idle;
-  // gentle driving shifts early (~2.5k), full throttle holds gears to ~90% of the limit
-  const up = car.idle + span * (0.2 + 0.7 * Math.pow(veh.thr, 1.5)), down = Math.max(car.idle * 1.3, up * 0.5);
-  if (now > veh.shiftT) {
-    if (veh.gear < n && wheelRpm(veh.v, veh.gear) > up) {
-      veh.gear++; veh.shiftT = now + 500;
-      if (veh.thr > 0.6) { veh.cutUntil = now + 90; eng && warmth() > 0.5 && eng({ bang: 1 + (Math.random() < 0.5) }); }
-    } else if (veh.gear > 1 && wheelRpm(veh.v, veh.gear) < down) {
-      veh.gear--; veh.shiftT = now + 500;
-      if (veh.thr < 0.5 && veh.v > 3) veh.blipUntil = now + 170;   // rev-match blip
-    }
+  // ---- automatic gearbox: shift program like a modern torque-converter automatic ----
+  const n = car.gears.length, span = red - car.idle, gpsMode = mode === 'gps';
+  // adaptive: remembers how hard you've been driving (~20 s) and shifts later when you drive hard
+  veh.style += (demand - veh.style) * Math.min(1, dt / 20);
+  const sporty = clamp((veh.style - 0.25) * 2, 0, 1);
+  const grade = gpsMode ? gps.grade : 0, corner = gpsMode && Math.abs(gps.latA) > 3;
+  // upshift point: gentle ~2.5k, full throttle ~90% of the limit; uphill holds gears a little longer
+  let up = car.idle + span * Math.min(0.92, 0.2 + 0.7 * Math.pow(demand, 1.5) + 0.12 * sporty + clamp(grade * 2.5, 0, 0.15));
+  // downshift point keeps a wide gap to the upshift point (hysteresis, no hunting);
+  // downhill with the foot off it drops a gear earlier for engine braking
+  let down = Math.max(car.idle * 1.3, up * 0.5);
+  if (grade < -0.04 && demand < 0.05 && veh.v > 8) down = Math.max(down, car.idle + span * 0.3);
+  // after a downshift the new gear must sit well below the next upshift (ratio steps are ~1.3–1.5×)
+  up = Math.min(red - 100, Math.max(up, down * 1.7));
+  // slowing down (braking, coasting) never upshifts
+  const slowing = gpsMode ? gps.a < -0.4 : pedal.brk || (demand < 0.05 && veh.v > 2);
+  const r = (g) => wheelRpm(veh.v, g);
+  let want = veh.gear;
+  if (veh.v < 0.5) want = 1;
+  else if (thr > 0.85 && demand < 0.7 && veh.gear > 1) {
+    // kickdown: pedal stomped, drop straight to the lowest gear that stays under the shift point
+    while (want > 1 && r(want - 1) < up * 0.95) want--;
+  } else if (veh.gear < n && r(veh.gear) > up && !corner && !slowing) want = veh.gear + 1;   // no upshift mid-corner
+  else if (veh.gear > 1 && r(veh.gear) < down) want = veh.gear - 1;
+  if (veh.rpm >= red - 60 && veh.gear < n && !veh.neutral && veh.v > 0.5) want = veh.gear + 1;   // never sit on the limiter
+  // the wish has to hold ~250 ms (GPS noise must not trigger shifts); kickdown and the limiter act at once
+  if (want !== veh.pendG) { veh.pendG = want; veh.pendT = now; }
+  const urgent = want < veh.gear - 1 || (want > veh.gear && veh.rpm >= red - 60);
+  if (want !== veh.gear && now > veh.shiftT && (urgent || now - veh.pendT > 250)) {
+    const upShift = want > veh.gear;
+    veh.gear = want; veh.shiftT = now + (upShift ? 600 : 450);
+    if (upShift && demand > 0.6) { veh.cutUntil = now + 90; eng && warmth() > 0.5 && eng({ bang: 1 + (Math.random() < 0.5) }); }
+    if (!upShift && demand < 0.5 && veh.v > 3) veh.blipUntil = now + 170;   // rev-match blip on coast downshifts
   }
   // rpm: wheel-locked, with clutch slip near standstill; cold engine idles higher and hunts a little
   veh.hunt += ((Math.random() - 0.5) * 60 - veh.hunt) * dt * 0.8;

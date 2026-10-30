@@ -23,7 +23,7 @@
 - **Real exhaust pops** when you lift off and on full-throttle upshifts.
 - **Start-up check:** needle sweep, system checks, starter cranking and a cold fast idle.
 - **Warm-up:** a cold engine gets a lower rev limit (the amber arc on the tach), and the coolant temperature is remembered between drives.
-- **Automatic gearbox:** rev-match blips on downshifts, shift lights and a soft limiter.
+- **Smart automatic gearbox:** it learns your driving style, kicks down when you press hard, holds the gear in corners, downshifts for engine braking on hills, ignores GPS noise, and adds rev-match blips, shift lights and a soft limiter.
 - **Lightweight:** one HTML file and no dependencies. Only the selected car's sounds load (about 200 KB).
 
 ## Run locally
