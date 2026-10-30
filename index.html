@@ -1,0 +1,674 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<meta name="theme-color" content="#000">
+<title>GhostRev</title>
+<meta name="description" content="GhostRev: real combustion engine sound for your EV, driven by GPS.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><rect width='24' height='24' rx='6' fill='%23000'/><path d='M5 21V11a7 7 0 0 1 14 0v10l-2.3-1.6L14.3 21 12 19.4 9.7 21l-2.4-1.6z' fill='none' stroke='%23ff6a13' stroke-width='2' stroke-linejoin='round'/><circle cx='9.5' cy='11' r='1.2' fill='%23ff6a13'/><circle cx='14.5' cy='11' r='1.2' fill='%23ff6a13'/></svg>">
+<style>
+  :root { --bg:#000; --fg:#f4f4f4; --dim:#7d828a; --glow:#ff6a13; --needle:#ff4d0a; --red:#e3191b; --line:#1f2328; --blue:#3a8dff; --chip:#121418; }
+  * { box-sizing:border-box; margin:0; -webkit-tap-highlight-color:transparent; }
+  html,body { height:100%; overflow:hidden; background:var(--bg); color:var(--fg); font:14px/1.25 "Helvetica Neue",Helvetica,Arial,sans-serif; user-select:none; }
+  body { display:grid; grid-template-rows:auto 1fr; gap:10px; padding:10px 14px 14px; }
+  button { font:inherit; color:var(--fg); background:var(--chip); border:1px solid #23272d; border-radius:9px; padding:7px 12px; cursor:pointer; touch-action:manipulation; white-space:nowrap; }
+  button.on { border-color:var(--glow); background:#21140b; color:#ffd7bd; }
+
+  /* ---------- top bar: compact chips ---------- */
+  #bar { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  #cars { display:flex; gap:6px; }
+  .grp { display:flex; gap:4px; padding:3px; border:1px solid var(--line); border-radius:12px; }
+  .grp button { border-color:transparent; }
+  .sp { flex:1; }
+  #brand { display:flex; align-items:center; gap:6px; margin-right:6px; font-weight:800; letter-spacing:.18em; font-size:13px; }
+  #brand b { color:var(--glow); font-weight:800; }
+  #brand .ico { color:var(--glow); filter:drop-shadow(0 0 6px rgba(255,106,19,.6)); }
+  #brand .ico svg { width:22px; height:22px; }
+  .vol { display:flex; align-items:center; gap:8px; color:var(--dim); font-size:12px; }
+  .vol input { width:140px; accent-color:var(--glow); }
+  .ico, .ic { display:inline-flex; align-items:center; justify-content:center; }
+  .ico svg, .ic svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2; stroke-linecap:round; stroke-linejoin:round; }
+  button.ic { width:40px; height:34px; padding:0; }
+  .grp button.ic { width:44px; }
+  #pops.on { color:#ff8a3d; box-shadow:0 0 12px rgba(255,106,19,.35) inset; }
+  .unitbtn { font-size:12px; letter-spacing:.06em; height:34px; }
+  #info { color:var(--dim); }
+  .mini .ico svg { width:14px; height:14px; }
+
+  /* ---------- cockpit: brake | speedo | center | tach | gas ---------- */
+  #cockpit { min-height:0; display:grid; grid-template-columns:auto 1fr minmax(170px,.55fr) 1fr auto; align-items:center; gap:1.5%;
+             padding:1.5% 2%; border-radius:26px; border:1px solid var(--line); background:radial-gradient(120% 90% at 50% 100%,#14100c 0%,#030303 60%); }
+  .dial { position:relative; width:min(100%, calc(100vh - 110px)); aspect-ratio:1; justify-self:center; }
+  .dial svg { position:absolute; inset:0; width:100%; height:100%; }
+  .needle { position:absolute; left:50%; top:50%; width:2.2%; height:44%; margin-left:-1.1%; transform-origin:50% 0;
+            background:linear-gradient(var(--needle) 0 70%, #ff9a4a 100%); border-radius:2px; box-shadow:0 0 10px rgba(255,90,10,.55); transform:rotate(45deg); will-change:transform; }
+  .hub { position:absolute; left:50%; top:50%; width:13%; height:13%; transform:translate(-50%,-50%); border-radius:50%; background:radial-gradient(circle at 40% 35%,#3a3d42,#0b0c0e 70%); border:1px solid #2b2e33; }
+  .dial .lab { position:absolute; left:0; right:0; top:66%; text-align:center; color:var(--dim); font-size:clamp(10px,1.1vw,14px); letter-spacing:.12em; }
+  .dial .dig { position:absolute; left:0; right:0; top:72%; text-align:center; font-size:clamp(18px,2.5vw,34px); font-weight:300; font-variant-numeric:tabular-nums; }
+
+  #center { display:flex; flex-direction:column; align-items:center; gap:9px; text-align:center; }
+  #lcd { width:100%; border-radius:14px; padding:12px 8px; background:linear-gradient(#0d0f12,#050607); border:1px solid #23272d; box-shadow:inset 0 0 22px rgba(255,106,19,.08); }
+  #gear { font-size:clamp(48px,7vw,100px); font-weight:700; line-height:1; color:var(--glow); text-shadow:0 0 18px rgba(255,106,19,.45); font-variant-numeric:tabular-nums; }
+  #msg { font-size:clamp(11px,1.15vw,15px); letter-spacing:.14em; margin-top:6px; min-height:1.3em; color:#ffd7bd; }
+  #msg.ok { color:#2fd067; } #msg.cold { color:var(--blue); } #msg.warn { color:#ffb21e; }
+  #carname { font-size:clamp(12px,1.2vw,16px); margin-top:6px; }
+  #status { color:var(--dim); font-size:11px; margin-top:3px; min-height:1.2em; } #status.warn { color:#ffb21e; }
+  .mini { width:100%; display:grid; grid-template-columns:auto 1fr auto; gap:5px 8px; align-items:center; font-size:10px; color:var(--dim); letter-spacing:.1em; }
+  .mini em { font-style:normal; font-variant-numeric:tabular-nums; min-width:3.2em; text-align:right; }
+  .mbar { height:5px; border-radius:3px; background:#15181c; overflow:hidden; }
+  .mbar i { display:block; height:100%; width:100%; background:var(--glow); transform-origin:0 50%; transform:scaleX(0); will-change:transform; }
+  #temp i { background:linear-gradient(90deg,var(--blue),#2fd067 60%,var(--glow)); }
+  #lights { display:flex; gap:6px; justify-content:center; height:9px; }
+  #lights b { width:20px; height:8px; border-radius:4px; background:#1a1d21; }
+  #lights b.g { background:#2fd067; box-shadow:0 0 8px #2fd067; } #lights b.y { background:#ffb21e; box-shadow:0 0 8px #ffb21e; } #lights b.r { background:var(--red); box-shadow:0 0 10px var(--red); }
+  #lights.flash b { animation:fl .12s steps(2) infinite; } @keyframes fl { 50% { opacity:.15; } }
+  #start { width:92px; height:92px; border-radius:50%; border:3px solid #3a3d42; padding:0; color:#fff;
+           background:radial-gradient(circle at 50% 35%,#2b2e33,#0c0d0f 70%); box-shadow:0 0 0 5px #111316, inset 0 -6px 14px rgba(0,0,0,.7);
+           font:700 11px/1.2 inherit; letter-spacing:.12em; white-space:normal; }
+  #start .ico svg { width:30px; height:30px; stroke-width:2.2; }
+  #start small { display:block; font-size:9px; color:var(--dim); font-weight:600; letter-spacing:.2em; margin-top:3px; }
+  #start.running .ico { color:var(--glow); filter:drop-shadow(0 0 6px rgba(255,106,19,.8)); }
+  #start.running { border-color:var(--glow); box-shadow:0 0 0 5px #111316, 0 0 24px rgba(255,106,19,.55), inset 0 -6px 14px rgba(0,0,0,.7); }
+  #start.busy { border-color:#ffb21e; }
+
+  /* pedals: full cockpit height, ribbed; a live fill + three big chevrons show how hard each one is pressed.
+   * Test mode: you press them. GPS mode: they show the throttle/braking read from the sensors; gas = REV when parked. */
+  .pedal { position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; align-self:stretch;
+           width:clamp(76px,8.5vw,128px); margin:2% 0; border-radius:18px; padding:0; border:2px solid #2a2e34;
+           background:repeating-linear-gradient(0deg,#1a1d22 0 10px,#0e1013 10px 16px); }
+  .pedal .fill { position:absolute; inset:0; transform-origin:50% 100%; transform:scaleY(0); will-change:transform;
+                 background:linear-gradient(to top, rgba(47,208,103,.55), rgba(47,208,103,.06)); }
+  #brk .fill { transform-origin:50% 0; background:linear-gradient(to bottom, rgba(255,59,48,.55), rgba(255,59,48,.06)); }
+  .chev { position:relative; display:flex; flex-direction:column; align-items:center; }
+  .chev svg { width:clamp(46px,5.6vw,78px); height:clamp(34px,4.2vw,58px); fill:none; stroke:#353a41; stroke-width:3.4; stroke-linecap:round; stroke-linejoin:round; transition:stroke .08s; }
+  #gas .chev svg.lit { stroke:#38e27a; filter:drop-shadow(0 0 7px rgba(56,226,122,.8)); }
+  #brk .chev svg.lit { stroke:#ff4b40; filter:drop-shadow(0 0 7px rgba(255,75,64,.8)); }
+  .pedal .tag { position:absolute; left:0; right:0; bottom:14px; font-size:12px; font-weight:700; letter-spacing:.24em; color:#38e27a; }
+  #gas.held { border-color:#2fd067; box-shadow:0 0 22px rgba(47,208,103,.45); }
+  #brk.held { border-color:var(--red); box-shadow:0 0 22px rgba(227,25,27,.45); }
+  body.gps #brk { pointer-events:none; }
+
+  dialog { margin:auto; max-width:640px; background:#0b0c0e; color:var(--fg); border:1px solid #2a2e34; border-radius:16px; padding:18px; font-size:12px; }
+  dialog::backdrop { background:rgba(0,0,0,.6); }
+  dialog a { color:#c9cdd3; } dialog li { margin:6px 0 0 16px; } dialog h3 { font-size:14px; margin-bottom:6px; }
+
+  @media (max-aspect-ratio: 4/3) {   /* portrait / narrow: stack the centre above the dials */
+    html,body { overflow:auto; height:auto; }
+    #cockpit { grid-template-columns:auto 1fr 1fr auto; }
+    #center { grid-column:1 / -1; grid-row:1; }
+    .dial { width:100%; }
+  }
+</style>
+</head>
+<body class="gps">
+<header id="bar">
+  <div id="brand"><span class="ico" data-i="ghost"></span>GHOST<b>REV</b></div>
+  <div id="cars"></div>
+  <div class="sp"></div>
+  <div class="grp"><button id="mGps" class="on ic" data-i="gps" title="GPS drive" aria-label="GPS drive"></button><button id="mTest" class="ic" data-i="wheel" title="Test drive" aria-label="Test drive"></button></div>
+  <button id="units" class="unitbtn">km/h</button>
+  <button id="pops" class="ic" data-i="flame" title="Exhaust crackle" aria-label="Exhaust crackle"></button>
+  <div class="vol"><span class="ico" data-i="vol"></span><input id="vol" type="range" min="0" max="100" value="80" aria-label="Volume"><span id="volv">80</span></div>
+  <button id="info" class="ic" data-i="info" title="Sound credits" aria-label="Sound credits"></button>
+</header>
+
+<main id="cockpit">
+  <button class="pedal" id="brk" aria-label="Brake"><i class="fill"></i><span class="chev" data-dir="down"></span></button>
+  <div class="dial"><svg id="spdSvg" viewBox="0 0 200 200"></svg><div class="needle" id="spdN"></div><div class="hub"></div>
+    <div class="lab" id="unit">KM/H</div><div class="dig" id="speed">0</div></div>
+  <div id="center">
+    <div id="lights"><b></b><b></b><b></b><b></b><b></b></div>
+    <div id="lcd">
+      <div id="gear">P</div><div id="msg">READY TO START</div>
+      <div id="carname">–</div><div id="status">Allow location</div>
+    </div>
+    <button id="start" aria-label="Engine start / stop"><span class="ico" data-i="power"></span><small>START</small></button>
+    <div class="mini">
+      <span class="ico" data-i="gauge" title="Load"></span><div class="mbar" id="thr"><i></i></div><em id="thrv">0%</em>
+      <span class="ico" data-i="temp" title="Coolant"></span><div class="mbar" id="temp"><i></i></div><em id="tempv">–</em>
+    </div>
+  </div>
+  <div class="dial"><svg id="rpmSvg" viewBox="0 0 200 200"></svg><div class="needle" id="rpmN"></div><div class="hub"></div>
+    <div class="lab">1/min ×1000</div><div class="dig" id="rpm">0</div></div>
+  <button class="pedal" id="gas" aria-label="Gas / rev"><i class="fill"></i><span class="chev" data-dir="up"></span><small class="tag" id="gastag"></small></button>
+</main>
+
+<dialog id="credits"><h3>Sound credits</h3><p>Real recordings, CC BY 3.0 via Wikimedia Commons, cut into pitch-marked grains and single exhaust pops.</p><ul id="credlist"></ul><p style="margin-top:12px"><button onclick="this.closest('dialog').close()">Close</button></p></dialog>
+
+<script>
+'use strict';
+/* ---------- Engine voice (shared by AudioWorklet and ScriptProcessor fallback) ----------
+ * Granular engine from real recordings. Each car's bank holds idle sections and tracked rev
+ * sweeps; every firing pulse in it is a pitch mark tagged with the rpm it was recorded at and
+ * whether rpm was rising (on throttle) or falling (off throttle). For every firing at the
+ * target rpm the voice plays the recorded pulse closest in rpm and load, preferring the next
+ * pulse of the same recording so the original texture keeps flowing (no fixed loop).
+ * Grains are two source periods long, Hann-windowed, overlap-added at the target period. */
+const DSP_SRC = `
+function makeEngine(sr) {
+  var p = { rpm: 0, load: 0, cut: 0, over: 0, fire: 1, starter: 0, pops: 1, gain: 0 };
+  var rpm = 0, load = 0, cut = 0, over = 0, fire = 1, starter = 0, gain = 0;
+  var buf = null, mPos = null, mF = null, mTag = null, mN = null, ord = null, nm = 0, idleF = 60, idleRpm = 900, last = -1;
+  var HN = new Float32Array(2049); for (var h = 0; h <= 2048; h++) HN[h] = 0.5 - 0.5 * Math.cos(6.283185 * h / 2048);
+  var MAXG = 64, gS = new Float64Array(MAXG), gL = new Int32Array(MAXG), gA = new Int32Array(MAXG), gAmp = new Float32Array(MAXG), ng = 0, next = 0;
+  var pb = null, pOff = [], pLen = 0, pv = [], queue = 0, qWait = 0;
+  var lp = 0, hpx = 0, hpy = 0, stPh = 0, seed = 12345;
+  var sm = 1 - Math.exp(-1 / (sr * 0.04));
+  function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2147483648 - 1; }
+  function r01() { return 0.5 + 0.5 * rnd(); }
+  function pop(g) {
+    if (!pb || pv.length >= 4) return;
+    var o = pOff[(r01() * pOff.length) | 0];
+    pv.push({ pos: o, end: o + pLen, g: g, rate: 0.88 + 0.24 * r01() });
+  }
+  function pick(ft, lt) {
+    var c = last + 1;
+    // keep reading the same recording while it still matches
+    if (last >= 0 && c < nm && mPos[c] - mPos[last] < 2.5 * sr / mF[last] &&
+        Math.abs(Math.log(mF[c] / ft)) < 0.04 && Math.abs(mTag[c] - lt) < 0.75) return c;
+    var lo = 0, hi = nm - 1;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (mF[ord[mid]] < ft) lo = mid + 1; else hi = mid; }
+    var best = ord[lo], bs = 1e9;
+    for (var j = Math.max(0, lo - 12); j <= Math.min(nm - 1, lo + 12); j++) {
+      var m = ord[j], s = Math.abs(Math.log(mF[m] / ft)) * 25 + Math.abs(mTag[m] - lt) * 0.8 + r01() * 0.3;
+      if (s < bs) { bs = s; best = m; }
+    }
+    return best;
+  }
+  return {
+    set: function (m) {
+      if (m.bank) {
+        buf = m.bank; mPos = m.mPos; mF = m.mF; mTag = m.mTag; mN = m.mN; nm = mF.length; idleF = m.idleF; idleRpm = m.idleRpm;
+        ord = new Int32Array(nm); for (var i = 0; i < nm; i++) ord[i] = i;
+        ord.sort(function (a, b) { return mF[a] - mF[b]; });
+        ng = 0; last = -1; next = 0;
+      }
+      if (m.popBuf) { pb = m.popBuf; pOff = m.popOffs.map(function (o) { return Math.round(o * sr); }); pLen = Math.round(m.popLen * sr); }
+      if (m.bang) { queue += m.bang; qWait = 0; }
+      for (var k in m) if (k !== 'bank' && k !== 'mPos' && k !== 'mF' && k !== 'mTag' && k !== 'mN' && k !== 'popBuf' && k !== 'bang') p[k] = m[k];
+    },
+    render: function (L, R, n) {
+      for (var i = 0; i < n; i++) {
+        rpm += (p.rpm - rpm) * sm; load += (p.load - load) * sm; over += (p.over - over) * sm;
+        cut += (p.cut - cut) * 0.01; fire += (p.fire - fire) * 0.002; starter += (p.starter - starter) * 0.001; gain += (p.gain - gain) * 0.0006;
+        var x = 0;
+        if (buf && rpm > 30) {
+          var ft = idleF * rpm / idleRpm, Pt = sr / ft;
+          if (next > Pt) next = Pt;             // rpm rose: don't wait out a slot scheduled at low rpm
+          if (--next <= 0) {
+            next += Pt * (1 + 0.015 * rnd());
+            var mk = pick(ft, over > 0.25 ? 0 : load > 0.55 ? 1 : 0.3); last = mk;
+            var Ps = sr / mF[mk];
+            if (ng < MAXG) {
+              gS[ng] = mPos[mk] - Ps; gL[ng] = Math.round(2 * Ps); gA[ng] = 0;
+              gAmp[ng] = mN[mk] * Math.sqrt(Math.min(Pt, 2 * Ps) / Ps) * (1 + 0.06 * rnd()) * (1 - 0.45 * cut) * (0.75 + 0.4 * load) * (0.3 + 0.7 * fire);
+              ng++;
+            }
+            // overrun: unburnt fuel lights off in the hot exhaust, more often at high rpm
+            if (p.pops && over > 0.12 && r01() < (0.012 + 0.08 * over) * Math.min(1.5, rpm / 3500)) pop(0.3 + 0.7 * over * r01());
+          }
+          for (var g = 0; g < ng; g++) {
+            var a = gA[g];
+            x += buf[(gS[g] + a) | 0] * HN[(a * 2048 / gL[g]) | 0] * gAmp[g];
+            if (++gA[g] >= gL[g]) { ng--; gS[g] = gS[ng]; gL[g] = gL[ng]; gA[g] = gA[ng]; gAmp[g] = gAmp[ng]; g--; }
+          }
+        }
+        // starter motor whine
+        if (starter > 0.001) { stPh += (150 + 40 * Math.sin(stPh * 0.02)) / sr; x += ((stPh % 1) * 2 - 1 + 0.5 * rnd()) * 0.06 * starter; }
+        // recordings already carry the load character; this only opens the tone a little on throttle
+        var fc = (1500 + 6000 * load + rpm * 0.5) * (0.35 + 0.65 * fire), c = 1 - Math.exp(-6.283 * fc / sr);
+        lp += (x - lp) * c;
+        var y = Math.tanh((lp * (1 - 0.35 * load) + x * 0.35 * load) * (1.1 + 0.6 * load));
+        if (queue > 0 && --qWait <= 0) { if (p.pops) pop(0.75 + 0.25 * r01()); queue--; qWait = sr * (0.04 + 0.05 * r01()); }
+        for (var v = 0; v < pv.length; v++) {
+          var s = pv[v], j = s.pos | 0, f = s.pos - j;
+          y += (pb[j] * (1 - f) + pb[j + 1] * f) * s.g * 0.9;
+          s.pos += s.rate; if (s.pos >= s.end - 1) { pv.splice(v, 1); v--; }
+        }
+        hpy = y - hpx + 0.996 * hpy; hpx = y;
+        var o = hpy * gain * 0.8;
+        L[i] = o; R[i] = o;
+      }
+    }
+  };
+}`;
+const WORKLET_SRC = DSP_SRC + `
+class EngineProc extends AudioWorkletProcessor {
+  constructor() { super(); this.e = makeEngine(sampleRate); this.port.onmessage = (ev) => this.e.set(ev.data); }
+  process(_, outs) { const o = outs[0]; this.e.render(o[0], o[1] || o[0], o[0].length); return true; }
+}
+registerProcessor('engine', EngineProc);`;
+
+/* ---------- Cars (sound banks in sounds/<id>.ogg + .json) ---------- */
+const CARS = [
+  { id:'v8',  name:'V8',         idle:925,  red:7000, gears:[2.97,2.07,1.43,1.0,0.71,0.57],          final:3.42, power:4.4,
+    credit:{ t:'Chevrolet Corvette C6 Z06 - engine and exhaust sound', a:'Neighborhood Car Reviews (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Chevrolet_Corvette_C6_Z06_-_engine_and_exhaust_sound_(YouTube_N3I-54kjT7I).opus' } },
+  { id:'f6',  name:'Flat-6',     idle:864,  red:9000, gears:[3.75,2.38,1.72,1.34,1.11,0.96,0.84],     final:4.47, power:5.0,
+    credit:{ t:'Porsche 911 GT3 (992) with Fi Exhaust - engine and exhaust sound', a:'CARSMANIA (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Porsche_911_GT3_(992)_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_-ZK8A1PT-4k).opus' } },
+  { id:'v12', name:'V12',        idle:1015, red:8700, gears:[3.08,2.19,1.63,1.29,1.03,0.84,0.69],     final:4.18, power:5.4,
+    credit:{ t:'Ferrari F12 berlinetta - engine and exhaust sound', a:'Luxury Cars Videos (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Ferrari_F12_berlinetta_-_engine_and_exhaust_sound_(YouTube_YGefdcd6d80).opus' } },
+  { id:'i4',  name:'Turbo 4',    idle:828,  red:7200, gears:[3.87,2.47,1.65,1.21,1.0,0.83,0.68,0.56], final:3.47, power:4.2,
+    credit:{ t:'Mercedes-Benz A 45 S AMG (W177) with Fi Exhaust - engine and exhaust sound', a:'FiExhaust (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Mercedes-Benz_A_45_S_AMG_(W177)_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_K6CgMnEOjzs).opus' } },
+];
+// sounds/pops.ogg: 14 single pops cut from the V8, V12 and M5 recordings, 0.16 s each, 0.18 s apart
+const POPS = { offs:[0,0.18,0.36,0.54,0.72,0.9,1.08,1.26,1.44,1.62,1.8,1.98,2.16,2.34], len:0.16,
+  extraCredit:{ t:'BMW M5 Competition with Fi Exhaust - engine and exhaust sound (exhaust pops)', a:'FiExhaust (YouTube)', u:'https://commons.wikimedia.org/wiki/File:BMW_M5_Competition_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_KrTDWpk8WDc).opus' } };
+const TIRE = 2.05;            // m per wheel revolution
+const AMBIENT = 18, HOT = 90; // °C coolant
+
+/* ---------- State ---------- */
+const $ = (id) => document.getElementById(id);
+const store = { get(k,d){ try { const v = localStorage.getItem('ghostrev.' + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
+                set(k,v){ try { localStorage.setItem('ghostrev.' + k, JSON.stringify(v)); } catch {} } };
+let car = CARS.find(c => c.id === store.get('car','v8')) || CARS[0];
+let mode = 'gps', mph = store.get('mph', false), pops = store.get('pops', true);
+let ctx = null, node = null, eng = null, wake = null, timer = null;
+// phase: off → check → crank → catch → run → stopping → off
+let phase = 'off', phaseT = 0;
+const veh = { v:0, gear:1, rpm:0, thr:0, brake:0, neutral:false, over:0, liftT:0, cut:0, shiftT:0, cutUntil:0, blipUntil:0, temp:AMBIENT, hunt:0 };
+const pedal = { gas:false, brk:false };
+const running = () => phase !== 'off';
+
+// coolant cools toward ambient while parked (time constant ~25 min), so a quick restart stays warm
+function restoreTemp() {
+  const s = store.get('temp', null);
+  if (!s) return AMBIENT;
+  return AMBIENT + (s.t - AMBIENT) * Math.exp(-(Date.now() - s.at) / 60000 / 25);
+}
+const warmth = () => clamp((veh.temp - AMBIENT) / (70 - AMBIENT), 0, 1);
+// BMW M style: a cold engine gets a lower limit that rises as it warms
+const effRed = () => Math.round((car.red - (1 - warmth()) * 0.32 * (car.red - car.idle)) / 250) * 250;
+
+/* ---------- GPS: speed + acceleration, extrapolated between fixes ---------- */
+const gps = { id:null, fixes:[], v:0, a:0, t:0, last:null, dist:0, alts:[], grade:0, hdg:null, latA:0 };
+function gpsStart() {
+  if (!('geolocation' in navigator)) return status('No GPS · use test mode', true);
+  gps.id = navigator.geolocation.watchPosition(onFix, (e) => status('Location: ' + e.message, true),
+    { enableHighAccuracy:true, maximumAge:0, timeout:10000 });
+}
+function gpsStop() { if (gps.id !== null) navigator.geolocation.clearWatch(gps.id); gps.id = null; gps.fixes = []; gps.last = null; gps.t = 0; gps.v = 0; gps.a = 0; gps.alts = []; gps.grade = 0; gps.hdg = null; gps.latA = 0; }
+function onFix(pos) {
+  const c = pos.coords, t = performance.now();
+  let v = c.speed;
+  if (v == null || isNaN(v)) {
+    if (gps.last) {
+      const dt = (pos.timestamp - gps.last.ts) / 1000;
+      v = dt > 0.05 ? hav(gps.last.lat, gps.last.lon, c.latitude, c.longitude) / dt : gps.v;
+    } else v = 0;
+  }
+  const fdt = gps.last ? (pos.timestamp - gps.last.ts) / 1000 : 0;
+  gps.last = { lat:c.latitude, lon:c.longitude, ts:pos.timestamp };
+  if (v < 0.4) v = 0;
+  // road grade: altitude against distance travelled, fitted over the last ~150 m (GPS altitude is noisy up close)
+  if (fdt > 0 && fdt < 3) gps.dist += v * fdt;
+  if (c.altitude != null && v > 2 && (c.altitudeAccuracy == null || c.altitudeAccuracy < 20)) {
+    gps.alts.push([gps.dist, c.altitude]);
+    while (gps.alts.length > 2 && gps.dist - gps.alts[0][0] > 150) gps.alts.shift();
+    const A = gps.alts, m = A.length;
+    if (m >= 4 && A[m-1][0] - A[0][0] > 60) {
+      let sx=0, sy=0, sxx=0, sxy=0; for (const [x, y] of A) { sx+=x; sy+=y; sxx+=x*x; sxy+=x*y; }
+      const g = (m*sxy - sx*sy) / (m*sxx - sx*sx);
+      if (isFinite(g)) gps.grade += (clamp(g, -0.12, 0.12) - gps.grade) * 0.3;
+    }
+  }
+  // cornering: yaw rate from heading changes × speed = lateral acceleration
+  if (c.heading != null && !isNaN(c.heading) && v > 3) {
+    if (gps.hdg != null && fdt > 0 && fdt < 3) {
+      let dh = c.heading - gps.hdg; if (dh > 180) dh -= 360; if (dh < -180) dh += 360;
+      gps.latA += (clamp(v * dh * Math.PI / 180 / fdt, -9, 9) - gps.latA) * 0.5;
+    }
+    gps.hdg = c.heading;
+  } else if (v <= 3) { gps.hdg = null; gps.latA *= 0.5; }
+  gps.fixes.push({ t, v });
+  while (gps.fixes.length > 2 && t - gps.fixes[0].t > 1500) gps.fixes.shift();
+  // least-squares slope = acceleration; clamp physically impossible spikes from GPS jumps
+  const f = gps.fixes, n = f.length;
+  if (n >= 2) {
+    let st=0, sv=0, stt=0, stv=0;
+    for (const p of f) { const x=(p.t-t)/1000; st+=x; sv+=p.v; stt+=x*x; stv+=x*p.v; }
+    const d = n*stt - st*st; gps.a = clamp(d > 1e-6 ? (n*stv - st*sv) / d : 0, -10, 8);
+  }
+  gps.v = v; gps.t = t;
+  status(`GPS ±${Math.round(c.accuracy)} m`);
+}
+function hav(a1,o1,a2,o2){ const r=Math.PI/180, dA=(a2-a1)*r, dO=(o2-o1)*r;
+  const h=Math.sin(dA/2)**2+Math.cos(a1*r)*Math.cos(a2*r)*Math.sin(dO/2)**2; return 12742000*Math.asin(Math.min(1,Math.sqrt(h))); }
+
+/* ---------- Virtual drivetrain ---------- */
+const clamp = (x,a,b) => x < a ? a : x > b ? b : x;
+function wheelRpm(v, g) { return v / TIRE * 60 * car.gears[g-1] * car.final; }
+function step(dt, now) {
+  let thr, over = 0;
+  const red = effRed();
+  if (mode === 'gps') {
+    const age = (now - gps.t) / 1000;
+    if (gps.t && age > 3) gps.a *= Math.exp(-dt);              // signal lost (tunnel): hold speed, relax the throttle
+    veh.v = gps.t ? Math.max(0, gps.v + gps.a * Math.min(age, 1.2)) : 0;
+    const a = gps.a;
+    // throttle needed = rolling/air drag + acceleration + climbing + tyre scrub in corners
+    // acceleration is scaled to what this car can do flat out, so a gentle 1 m/s² is part throttle
+    const need = 0.06 + veh.v / 90 + a / (car.power * 1.1) + gps.grade * 2.5 + Math.abs(gps.latA) * 0.03;
+    veh.neutral = veh.v < 0.5;
+    if (veh.neutral) {
+      thr = pedal.gas ? 1 : 0;                                 // parked: the gas pedal revs the engine in neutral
+      if (!pedal.gas && veh.rpm > car.idle * 1.8) over = 0.7;
+    } else {
+      thr = clamp(need, 0, 1);
+      if ((a < -0.25 || need < 0.03) && veh.v > 2) { thr = 0; over = clamp(Math.max(-a / 2.5, -need * 3), 0.3, 1); }
+    }
+    // braking beyond engine-braking/regen deceleration
+    veh.brake += (clamp((-a - 1.2) / 5, 0, 1) - veh.brake) * Math.min(1, dt * 8);
+  } else {
+    thr = pedal.gas ? 1 : 0;
+    const ratio = car.gears[veh.gear-1] / car.gears[0];
+    let acc = thr * car.power * Math.pow(ratio, 0.8) * (veh.cut ? 0.3 : 1) - 0.0005 * veh.v * veh.v - 0.12;
+    if (veh.rpm >= red - 50 && thr) acc = Math.min(acc, 0);
+    if (pedal.brk) acc -= 7;
+    veh.v = Math.max(0, veh.v + acc * dt);
+    veh.neutral = false;
+    veh.brake += ((pedal.brk ? 1 : 0) - veh.brake) * Math.min(1, dt * 10);
+    if (!thr && veh.v > 2) over = 1;
+  }
+  // pops are strongest right after lifting off and die away as the exhaust cools
+  if (over && !veh.over) veh.liftT = now;
+  veh.over = over ? over * Math.exp(-(now - veh.liftT) / 2500) : 0;
+  // throttle opens a bit slower than it closes, like a real drive-by-wire pedal map
+  veh.thr += (thr - veh.thr) * Math.min(1, dt * (thr > veh.thr ? 4 : 7));
+  if (now < veh.blipUntil) veh.thr = Math.max(veh.thr, 0.55);
+
+  // gear selection; the cold limit also caps the shift points
+  const n = car.gears.length, span = red - car.idle;
+  // gentle driving shifts early (~2.5k), full throttle holds gears to ~90% of the limit
+  const up = car.idle + span * (0.2 + 0.7 * Math.pow(veh.thr, 1.5)), down = Math.max(car.idle * 1.3, up * 0.5);
+  if (now > veh.shiftT) {
+    if (veh.gear < n && wheelRpm(veh.v, veh.gear) > up) {
+      veh.gear++; veh.shiftT = now + 500;
+      if (veh.thr > 0.6) { veh.cutUntil = now + 90; eng && warmth() > 0.5 && eng({ bang: 1 + (Math.random() < 0.5) }); }
+    } else if (veh.gear > 1 && wheelRpm(veh.v, veh.gear) < down) {
+      veh.gear--; veh.shiftT = now + 500;
+      if (veh.thr < 0.5 && veh.v > 3) veh.blipUntil = now + 170;   // rev-match blip
+    }
+  }
+  // rpm: wheel-locked, with clutch slip near standstill; cold engine idles higher and hunts a little
+  veh.hunt += ((Math.random() - 0.5) * 60 - veh.hunt) * dt * 0.8;
+  const idle = car.idle * (1 + 0.3 * (1 - warmth())) + veh.hunt;
+  let target = wheelRpm(veh.v, veh.gear);
+  const slip = idle + veh.thr * span * 0.35;
+  if (veh.gear === 1 && target < slip) target = target + (slip - target) * clamp(1 - veh.v / 6, 0, 1);
+  target = Math.max(target, idle);
+  if (veh.neutral) {
+    // free revving: flywheel spins up fast, falls back slower
+    target = idle + veh.thr * (red - idle) * 1.05;
+    veh.rpm += (target - veh.rpm) * Math.min(1, dt * (target > veh.rpm ? 6 : 2.2));
+  } else
+  // shifts swing rpm smoothly (clutch / torque converter), not in one step
+  veh.rpm += (target - veh.rpm) * Math.min(1, dt * (now < veh.shiftT - 300 ? 7 : 12));
+  // limiter: soft bounce
+  let cut = now < veh.cutUntil ? 1 : 0;
+  if (veh.rpm > red) { veh.rpm = red - 40; cut = 1; }
+  veh.cut = cut;
+  // coolant warms with work, thermostat holds ~90 °C
+  veh.temp = Math.min(HOT, veh.temp + dt * (0.12 + 0.5 * veh.thr * veh.rpm / car.red));
+}
+
+/* ---------- Start-up show and shut-down ---------- */
+const CHECKS = [['CHECK',''],['OIL ✓','ok'],['BRAKES ✓','ok'],['TYRES ✓','ok'],['IGNITION','']];
+function lifecycle(dt, now) {
+  const t = (now - phaseT) / 1000;
+  if (phase === 'check') {
+    if (t > 2.4) setPhase('crank', now);
+  } else if (phase === 'crank') {
+    // a cold engine cranks longer
+    veh.rpm = 210 + 40 * Math.sin(t * 25);
+    eng && eng({ rpm:veh.rpm, load:0, fire:0, starter:1, over:0, cut:0 });
+    if (t > 0.55 + 0.6 * (1 - warmth())) { setPhase('catch', now); eng && eng({ starter:0, fire:1 }); if (warmth() < 0.3) eng && eng({ bang:1 }); }
+  } else if (phase === 'catch') {
+    // fires, flares well above idle, then settles
+    const flare = car.idle * (2.1 - 0.5 * warmth()), settle = car.idle * (1 + 0.3 * (1 - warmth()));
+    veh.rpm = t < 0.35 ? 210 + (flare - 210) * (t / 0.35) : flare + (settle - flare) * (1 - Math.exp(-(t - 0.35) / 0.5));
+    eng && eng({ rpm:veh.rpm, load: t < 0.35 ? 0.7 : 0.15, fire:1 });
+    if (t > 1.8) { setPhase('run', now); timerStart(); }
+  } else if (phase === 'stopping') {
+    veh.rpm *= Math.exp(-dt * 3.2);
+    eng && eng({ rpm:veh.rpm, load:0, fire:0, over:0, starter:0 });
+    if (veh.rpm < 60) {
+      eng && eng({ gain:0, rpm:0 }); setPhase('off', now); clearInterval(timer);
+      setTimeout(() => { if (phase === 'off') ctx?.suspend(); }, 1200);
+    }
+  }
+}
+function setPhase(p, now) {
+  phase = p; phaseT = now;
+  $('start').classList.toggle('running', p === 'run');
+  $('start').classList.toggle('busy', p === 'check' || p === 'crank' || p === 'catch' || p === 'stopping');
+  $('start').querySelector('small').textContent = p === 'off' ? 'START' : 'STOP';
+}
+function chime() {
+  const t = ctx.currentTime;
+  for (const [f, d] of [[880, 0], [1318.5, 0.16]]) {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = f;
+    g.gain.setValueAtTime(0, t + d); g.gain.linearRampToValueAtTime(0.12 * $('vol').value / 100, t + d + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.9);
+    o.connect(g).connect(ctx.destination); o.start(t + d); o.stop(t + d + 1);
+  }
+}
+
+/* ---------- Audio: files are fetched once (prefetched for the selected car) and decoded on demand ---------- */
+const files = new Map(), banks = new Map();
+const get = (url, type) => { if (!files.has(url)) files.set(url, fetch(url).then(r => { if (!r.ok) throw new Error(r.status + ' ' + url); return type === 'json' ? r.json() : r.arrayBuffer(); })); return files.get(url); };
+function prefetch(c) { get(`sounds/${c.id}.ogg`).catch(() => {}); get(`sounds/${c.id}.json`, 'json').catch(() => {}); }
+async function loadCar(c) {
+  if (!banks.has(c.id)) {
+    const [ab, meta] = await Promise.all([get(`sounds/${c.id}.ogg`), get(`sounds/${c.id}.json`, 'json')]);
+    const data = (await ctx.decodeAudioData(ab.slice(0))).getChannelData(0), k = ctx.sampleRate / meta.sr, n = meta.marks.length;
+    const mPos = new Float64Array(n), mF = new Float32Array(n), mTag = new Float32Array(n), mN = new Float32Array(n);
+    // level-match grains (partially, so the recording's own swell survives): no volume jumps when grains change source
+    const med = meta.marks.map(m => m[3]).sort((a, b) => a - b)[n >> 1];
+    meta.marks.forEach(([p, f, t, r], i) => { mPos[i] = p * k; mF[i] = f / 10; mTag[i] = t; mN[i] = Math.min(2.5, Math.pow(med / r, 0.65)); });
+    banks.set(c.id, { data, mPos, mF, mTag, mN, idleF:meta.idleF });
+  }
+  const b = banks.get(c.id);
+  eng({ bank:b.data.slice(), mPos:b.mPos.slice(), mF:b.mF.slice(), mTag:b.mTag.slice(), mN:b.mN.slice(), idleF:b.idleF, idleRpm:c.idle });
+}
+async function audioStart() {
+  ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:'playback' });
+  if (ctx.audioWorklet) {
+    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET_SRC], { type:'application/javascript' })));
+    node = new AudioWorkletNode(ctx, 'engine', { outputChannelCount:[2] });
+    eng = (m) => node.port.postMessage(m, m.bank ? [m.bank.buffer, m.mPos.buffer, m.mF.buffer, m.mTag.buffer, m.mN.buffer] : m.popBuf ? [m.popBuf.buffer] : []);
+  } else {
+    const e = new Function(DSP_SRC + ';return makeEngine;')()(ctx.sampleRate);
+    node = ctx.createScriptProcessor(2048, 0, 2);
+    node.onaudioprocess = (ev) => { const b = ev.outputBuffer; e.render(b.getChannelData(0), b.getChannelData(1), b.length); };
+    eng = (m) => e.set(m);
+  }
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -10; comp.ratio.value = 4; comp.attack.value = 0.002;
+  node.connect(comp).connect(ctx.destination);
+  if (ctx.state === 'suspended') await ctx.resume();
+  get('sounds/pops.ogg').then(ab => ctx.decodeAudioData(ab.slice(0)))
+    .then(d => eng({ popBuf:new Float32Array(d.getChannelData(0)), popOffs:POPS.offs, popLen:POPS.len }))
+    .catch(() => status('Crackle sounds missing', true));
+}
+function sendVol() { const v = $('vol').value / 100; eng && eng({ gain: running() ? v * v * 1.2 : 0 }); }
+
+/* ---------- Main loop: physics in fixed 20 ms steps on a timer (frame-rate independent),
+ * audio params once per tick, DOM only from requestAnimationFrame and only when values change ---------- */
+const STEP = 0.02;
+let lastT = 0, ui = {}, saveT = 0;
+function tick() {
+  const now = performance.now();
+  let left = Math.min(1, (now - lastT) / 1000); const dt = left; lastT = now;
+  if (phase !== 'run') return lifecycle(dt, now);
+  while (left > 1e-4) { const d = Math.min(STEP, left); step(d, now); left -= d; }
+  eng && eng({ rpm:veh.rpm, load:veh.cut ? 0.2 : 0.1 + 0.9 * veh.thr, over:veh.over, cut:veh.cut, pops: pops ? 1 : 0 });
+  if (now - saveT > 5000) { saveT = now; store.set('temp', { t:veh.temp, at:Date.now() }); }
+}
+function timerStart() { lastT = performance.now(); clearInterval(timer); timer = setInterval(tick, 20); }
+function frame() { draw(); if (running()) requestAnimationFrame(frame); }
+
+/* ---------- Cluster: SVG dial faces redrawn only when the scale changes; needles move by CSS transform ---------- */
+const A0 = -135, SWEEP = 270; // needle angle from 12 o'clock, clockwise
+let spdMax = 260, rpmMax = 8;
+function face(svg, max, major, minorPer, redFrom, warnFrom) {
+  const pt = (a, r) => { const t = (a - 90) * Math.PI / 180; return [100 + r * Math.cos(t), 100 + r * Math.sin(t)]; };
+  const arc = (from, to, col, w) => { const a1 = A0 + SWEEP * from / max, a2 = A0 + SWEEP * to / max, [x1,y1] = pt(a1, 84), [x2,y2] = pt(a2, 84);
+    return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A84 84 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${w}"/>`; };
+  let s = `<circle cx="100" cy="100" r="98" fill="#060708" stroke="#24282e" stroke-width="1.5"/>
+           <circle cx="100" cy="100" r="93" fill="none" stroke="#ff6a13" stroke-opacity=".18" stroke-width="1"/>`;
+  if (warnFrom != null && warnFrom < redFrom) s += arc(warnFrom, redFrom, '#ffb21e', 5);
+  if (redFrom != null) s += arc(redFrom, max, '#e3191b', 7);
+  const steps = max / major * minorPer;
+  for (let i = 0; i <= steps; i++) {
+    const a = A0 + SWEEP * i / steps, isMaj = i % minorPer === 0, [x1,y1] = pt(a, 90), [x2,y2] = pt(a, isMaj ? 78 : 84);
+    const red = redFrom != null && (i / steps) * max >= redFrom;
+    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${red ? '#ff3b30' : '#e8e8e8'}" stroke-width="${isMaj ? 2.4 : 1}"/>`;
+    if (isMaj) { const [tx,ty] = pt(a, 64); s += `<text x="${tx.toFixed(1)}" y="${(ty + 4.5).toFixed(1)}" fill="${red ? '#ff3b30' : '#f2f2f2'}" font-size="13" text-anchor="middle" font-family="Helvetica Neue,Arial">${i / minorPer * major}</text>`; }
+  }
+  svg.innerHTML = s;
+}
+function drawSpeedFace() { spdMax = mph ? 180 : 280; face($('spdSvg'), spdMax, 20, 2); }
+function drawRpmFace() {
+  rpmMax = Math.ceil(car.red / 1000) + 1;
+  const er = effRed();
+  // amber band = the part of the range locked out while the engine is cold
+  face($('rpmSvg'), rpmMax, 1, 4, car.red / 1000, er < car.red ? er / 1000 : null);
+  ui.face = er;
+}
+function setText(id, s) { if (ui[id] !== s) { ui[id] = s; $(id).textContent = s; } }
+function setNeedle(id, f) { const a = Math.round((A0 + SWEEP * clamp(f, 0, 1.02)) * 4) / 4 + 180; if (ui[id] !== a) { ui[id] = a; $(id).style.transform = `rotate(${a}deg)`; } }
+function setBar(id, f) { f = Math.round(clamp(f,0,1) * 100) / 100; if (ui[id] !== f) { ui[id] = f; $(id).firstElementChild.style.transform = `scaleX(${f})`; } }
+function setPedal(id, f) {
+  f = Math.round(clamp(f, 0, 1) * 50) / 50;
+  if (ui[id] === f) return; ui[id] = f;
+  const el = $(id); el.firstElementChild.style.transform = `scaleY(${f})`;
+  // chevrons light from the foot end: bottom-up on gas, top-down on brake
+  const cs = el.querySelectorAll('.chev svg'), n = Math.round(f * 3 + 0.2);
+  cs.forEach((c, i) => c.classList.toggle('lit', (id === 'gas' ? cs.length - 1 - i : i) < n));
+}
+function setMsg(s, cls) { setText('msg', s); if (ui.msgc !== cls) { ui.msgc = cls; $('msg').className = cls || ''; } }
+function setLights(n, flash) {
+  if (ui.sl === n + (flash ? 'f' : '')) return; ui.sl = n + (flash ? 'f' : '');
+  const bs = $('lights').children;
+  for (let i = 0; i < 5; i++) bs[i].className = i < n ? (i < 2 ? 'g' : i < 4 ? 'y' : 'r') : '';
+  $('lights').classList.toggle('flash', !!flash);
+}
+function draw() {
+  const now = performance.now(), t = (now - phaseT) / 1000;
+  const sp = veh.v * (mph ? 2.23694 : 3.6), r = running() ? veh.rpm : 0;
+  if (phase === 'check') {
+    // needle sweep and lamp test
+    const s = Math.sin(Math.PI * clamp(t / 1.6, 0, 1));
+    setNeedle('spdN', s); setNeedle('rpmN', s);
+    setLights(t < 1.6 ? Math.ceil(s * 5) : 0);
+    const c = CHECKS[Math.min(CHECKS.length - 1, Math.floor(t / 0.5))];
+    setMsg(c[0], c[1]); setText('gear', 'P');
+  } else {
+    setNeedle('spdN', sp / spdMax);
+    setNeedle('rpmN', r / 1000 / rpmMax);
+    const er = effRed();
+    if (ui.face !== er) drawRpmFace();
+    // shift lights: last 25% before the current limit
+    const sl = phase === 'run' ? clamp(Math.floor((r - er * 0.75) / (er * 0.05)) + 1, 0, 5) : 0;
+    setLights(sl, sl === 5);
+    setText('gear', phase === 'run' ? (veh.neutral || (veh.v < 0.3 && veh.thr < 0.05) ? 'N' : (mode === 'test' ? 'M' : 'D') + veh.gear) : 'P');
+    if (phase === 'crank') setMsg('CRANKING', 'warn');
+    else if (phase === 'catch') setMsg('RUNNING', 'ok');
+    else if (phase === 'stopping') setMsg('OFF', '');
+    else if (phase === 'off') setMsg('READY TO START', '');
+    else if (veh.over > 0.3 && pops) setMsg('OVERRUN', 'warn');
+    else if (warmth() < 1) setMsg(`❄ COLD · ${(er / 1000).toFixed(er % 1000 ? 2 : 0)}k`, 'cold');
+    else setMsg('WARM ✓', 'ok');
+  }
+  setText('speed', String(Math.round(sp)));
+  setText('rpm', running() ? String(Math.round(r / 50) * 50) : '0');
+  setBar('thr', phase === 'run' ? veh.thr : 0);
+  setPedal('gas', phase === 'run' ? veh.thr : 0);
+  setPedal('brk', phase === 'run' ? veh.brake : 0);
+  setText('gastag', mode === 'gps' && phase === 'run' && veh.neutral ? 'REV' : '');
+  setText('thrv', Math.round(phase === 'run' ? veh.thr * 100 : 0) + '%');
+  setBar('temp', (veh.temp - AMBIENT) / (HOT + 10 - AMBIENT));
+  setText('tempv', Math.round(veh.temp) + '°C');
+}
+
+/* ---------- UI ---------- */
+function status(msg, warn) { const s = $('status'); s.textContent = msg; s.className = warn ? 'warn' : ''; }
+function renderCars() {
+  $('cars').innerHTML = CARS.map(c => `<button data-id="${c.id}" class="${c === car ? 'on' : ''}">${c.name}</button>`).join('');
+  $('carname').textContent = `${car.name} · ${(car.red / 1000).toFixed(1)}k`;
+}
+$('credlist').innerHTML = [...CARS.map(c => [c.name, c.credit]), ['Exhaust pops', POPS.extraCredit]]
+  .map(([n, c]) => `<li>${n}: <a href="${c.u}" target="_blank" rel="noopener">${c.t}</a>, by ${c.a}, CC BY 3.0</li>`).join('');
+$('info').onclick = () => $('credits').showModal();
+$('cars').addEventListener('click', async (e) => {
+  const b = e.target.closest('button'); if (!b) return;
+  car = CARS.find(c => c.id === b.dataset.id); store.set('car', car.id); prefetch(car);
+  veh.gear = 1; renderCars(); drawRpmFace(); ui = {}; draw();
+  if (ctx) { try { await loadCar(car); } catch (err) { status('Sound failed: ' + err.message, true); } }
+});
+$('start').onclick = async () => {
+  if (phase === 'off') {
+    try { if (!ctx) await audioStart(); else await ctx.resume(); await loadCar(car); }
+    catch (err) { return status('Audio failed: ' + err.message, true); }
+    veh.temp = restoreTemp(); veh.v = 0; veh.gear = 1; veh.rpm = 0; veh.thr = 0; veh.over = 0;
+    eng({ rpm:0, fire:0, starter:0, load:0, over:0, cut:0, pops: pops ? 1 : 0 });
+    setPhase('check', performance.now()); chime(); sendVol();
+    if (mode === 'gps') gpsStart();
+    try { wake = await navigator.wakeLock?.request('screen'); } catch {}
+    timerStart(); requestAnimationFrame(frame);
+  } else if (phase !== 'stopping') {
+    store.set('temp', { t:veh.temp, at:Date.now() });
+    gpsStop(); veh.v = 0; veh.thr = 0; wake?.release?.(); wake = null;
+    setPhase('stopping', performance.now()); timerStart();
+  }
+};
+function setMode(m) {
+  mode = m; $('mGps').classList.toggle('on', m === 'gps'); $('mTest').classList.toggle('on', m === 'test');
+  document.body.classList.toggle('test', m === 'test'); document.body.classList.toggle('gps', m === 'gps');
+  veh.v = 0;
+  if (running()) { if (m === 'gps') gpsStart(); else gpsStop(); }
+  status(m === 'gps' ? 'GPS drive · parked: hold gas to rev' : 'Hold gas · lift for pops');
+}
+$('mGps').onclick = () => setMode('gps');
+$('mTest').onclick = () => setMode('test');
+for (const [id, k] of [['gas','gas'],['brk','brk']]) {
+  const b = $(id), on = (e) => { e.preventDefault(); b.setPointerCapture?.(e.pointerId); pedal[k] = true; b.classList.add('held'); }, off = () => { pedal[k] = false; b.classList.remove('held'); };
+  b.addEventListener('pointerdown', on); b.addEventListener('pointerup', off); b.addEventListener('pointercancel', off); b.addEventListener('lostpointercapture', off);
+  b.addEventListener('contextmenu', (e) => e.preventDefault());
+}
+addEventListener('keydown', (e) => { if (e.key === 'ArrowUp' || e.key === ' ') pedal.gas = true; if (e.key === 'ArrowDown') pedal.brk = true; });
+addEventListener('keyup', (e) => { if (e.key === 'ArrowUp' || e.key === ' ') pedal.gas = false; if (e.key === 'ArrowDown') pedal.brk = false; });
+function volUi() { $('volv').textContent = $('vol').value; }
+$('vol').oninput = () => { volUi(); store.set('vol', +$('vol').value); sendVol(); };
+$('vol').value = store.get('vol', 80);
+const unitsUi = () => { $('units').textContent = mph ? 'mph' : 'km/h'; $('unit').textContent = mph ? 'MPH' : 'KM/H'; drawSpeedFace(); ui = {}; draw(); };
+$('units').onclick = () => { mph = !mph; store.set('mph', mph); unitsUi(); };
+const popsUi = () => { $('pops').classList.toggle('on', pops); eng && eng({ pops: pops ? 1 : 0 }); };
+$('pops').onclick = () => { pops = !pops; store.set('pops', pops); popsUi(); };
+document.addEventListener('visibilitychange', async () => {
+  if (running() && document.visibilityState === 'visible') { try { wake = await navigator.wakeLock?.request('screen'); } catch {} ctx?.resume(); }
+});
+/* line icons (24×24, stroke = currentColor) */
+const ICONS = {
+  ghost:'<path d="M5 21V11a7 7 0 0 1 14 0v10l-2.3-1.6L14.3 21 12 19.4 9.7 21l-2.4-1.6z"/><circle cx="9.5" cy="11" r="1.1"/><circle cx="14.5" cy="11" r="1.1"/>',
+  gps:'<path d="M12 21s-7-6.2-7-11.5a7 7 0 0 1 14 0C19 14.8 12 21 12 21z"/><circle cx="12" cy="9.5" r="2.5"/>',
+  wheel:'<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2"/><path d="M3.5 10.5 10 12M20.5 10.5 14 12M12 14v7"/>',
+  flame:'<path d="M12 22c4 0 7-2.7 7-6.6 0-3.1-2-5.4-3.6-7.2-.3 1.9-1.3 3.1-2.4 3.4C13.6 8 12.4 4.8 9.5 2c.2 3.6-4.5 6.6-4.5 11.4C5 19.3 8 22 12 22z"/>',
+  vol:'<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18.5 6.5a8 8 0 0 1 0 11"/>',
+  info:'<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.6v.1"/>',
+  power:'<path d="M12 3v8.5"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/>',
+  gas:'<path d="m6 13 6-6 6 6M6 19l6-6 6 6"/>',
+  brake:'<circle cx="12" cy="12" r="6.5"/><path d="M4.2 7.5a10 10 0 0 0 0 9M19.8 7.5a10 10 0 0 1 0 9"/>',
+  gauge:'<path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="m12 13 3.5-4.5"/>',
+  temp:'<path d="M10 14.5V5a2 2 0 0 1 4 0v9.5a4 4 0 1 1-4 0z"/><path d="M12 10v6"/>',
+};
+document.querySelectorAll('.chev').forEach(el => { const d = el.dataset.dir === 'up' ? 'M5 21 16 10l11 11' : 'M5 11l11 11 11-11';
+  el.innerHTML = `<svg viewBox="0 0 32 32">${''}<path d="${d}"/></svg>`.repeat(3); });
+document.querySelectorAll('[data-i]').forEach(el => { el.insertAdjacentHTML('afterbegin', `<svg viewBox="0 0 24 24" aria-hidden="true">${ICONS[el.dataset.i]}</svg>`); });
+veh.temp = restoreTemp();
+prefetch(car);
+renderCars(); drawRpmFace(); unitsUi(); popsUi(); volUi();
+</script>
+</body>
+</html>
