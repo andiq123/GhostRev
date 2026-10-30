@@ -511,7 +511,8 @@ function frame() { draw(); if (running()) requestAnimationFrame(frame); }
 /* ---------- Cluster: SVG dial faces redrawn only when the scale changes; needles move by CSS transform ---------- */
 const A0 = -135, SWEEP = 270; // needle angle from 12 o'clock, clockwise
 let spdMax = 260, rpmMax = 8;
-function face(svg, max, major, minorPer, redFrom, warnFrom) {
+// labelEvery: only every n-th unit gets a number (and the longest tick); other majors get a mid tick
+function face(svg, max, major, minorPer, redFrom, warnFrom, labelEvery = major, fontSize = 13) {
   const pt = (a, r) => { const t = (a - 90) * Math.PI / 180; return [100 + r * Math.cos(t), 100 + r * Math.sin(t)]; };
   const arc = (from, to, col, w) => { const a1 = A0 + SWEEP * from / max, a2 = A0 + SWEEP * to / max, [x1,y1] = pt(a1, 84), [x2,y2] = pt(a2, 84);
     return `<path d="M${x1.toFixed(1)} ${y1.toFixed(1)} A84 84 0 ${a2 - a1 > 180 ? 1 : 0} 1 ${x2.toFixed(1)} ${y2.toFixed(1)}" fill="none" stroke="${col}" stroke-width="${w}"/>`; };
@@ -521,14 +522,17 @@ function face(svg, max, major, minorPer, redFrom, warnFrom) {
   if (redFrom != null) s += arc(redFrom, max, '#e3191b', 7);
   const steps = max / major * minorPer;
   for (let i = 0; i <= steps; i++) {
-    const a = A0 + SWEEP * i / steps, isMaj = i % minorPer === 0, [x1,y1] = pt(a, 90), [x2,y2] = pt(a, isMaj ? 78 : 84);
-    const red = redFrom != null && (i / steps) * max >= redFrom;
-    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${red ? '#ff3b30' : '#e8e8e8'}" stroke-width="${isMaj ? 2.4 : 1}"/>`;
-    if (isMaj) { const [tx,ty] = pt(a, 64); s += `<text x="${tx.toFixed(1)}" y="${(ty + 4.5).toFixed(1)}" fill="${red ? '#ff3b30' : '#f2f2f2'}" font-size="13" text-anchor="middle" font-family="Helvetica Neue,Arial">${i / minorPer * major}</text>`; }
+    const val = Math.round(i / steps * max * 1000) / 1000, a = A0 + SWEEP * i / steps;
+    const isMaj = i % minorPer === 0, isLab = isMaj && Math.abs(val / labelEvery - Math.round(val / labelEvery)) < 1e-6;
+    const [x1,y1] = pt(a, 90), [x2,y2] = pt(a, isLab ? 77 : isMaj ? 81 : 85);
+    const red = redFrom != null && val >= redFrom;
+    s += `<line x1="${x1.toFixed(1)}" y1="${y1.toFixed(1)}" x2="${x2.toFixed(1)}" y2="${y2.toFixed(1)}" stroke="${red ? '#ff3b30' : '#e8e8e8'}" stroke-width="${isLab ? 2.6 : isMaj ? 1.7 : 1}"/>`;
+    if (isLab) { const [tx,ty] = pt(a, 64); s += `<text x="${tx.toFixed(1)}" y="${(ty + fontSize * 0.36).toFixed(1)}" fill="${red ? '#ff3b30' : '#f2f2f2'}" font-size="${fontSize}" text-anchor="middle" font-family="Helvetica Neue,Arial">${val}</text>`; }
   }
   svg.innerHTML = s;
 }
-function drawSpeedFace() { spdMax = mph ? 180 : 280; face($('spdSvg'), spdMax, 20, 2); }
+// km/h: numbers every 40, ticks every 20 and 10 · mph: numbers every 20, ticks every 10 and 5
+function drawSpeedFace() { spdMax = mph ? 180 : 280; face($('spdSvg'), spdMax, mph ? 10 : 20, 2, null, null, mph ? 20 : 40, 14); }
 function drawRpmFace() {
   rpmMax = Math.ceil(car.red / 1000) + 1;
   const er = effRed();
