@@ -18,13 +18,14 @@
 
 ## Features
 
-- **Real recordings:** the sound is built from real engine recordings. Each moment plays a recorded firing pulse that matches the current rpm and throttle, so there's no repeating loop.
-- **Four engines:** V8, flat-six, V12 and turbo four.
-- **Real exhaust pops** when you lift off and on full-throttle upshifts.
+- **Real recordings:** each engine is a set of seamless loops cut from real recordings at fixed rpm points. The browser's own audio engine plays and crossfades them, so the sound stays smooth even on the car's processor.
+- **Three engines:** V8, flat-six and turbo four.
+- **Real exhaust crackle:** real recorded overrun crackle when you lift off, and a real bang on full-throttle upshifts.
 - **Start-up check:** needle sweep, system checks, starter cranking and a cold fast idle.
 - **Warm-up:** a cold engine gets a lower rev limit (the amber arc on the tach), and the coolant temperature is remembered between drives.
 - **Smart automatic gearbox:** it learns your driving style, kicks down when you press hard, holds the gear in corners, downshifts for engine braking on hills, ignores GPS noise, and adds rev-match blips, shift lights and a soft limiter.
-- **Lightweight:** one HTML file and no dependencies. Only the selected car's sounds load (about 200 KB).
+- **Smooth GPS speed:** a filter made for the Tesla browser's 10 fixes per second without a speed value, so there are no speed jumps, no fake speed while parked, and no gear hunting.
+- **Lightweight:** one HTML file and no dependencies. Only the selected car's sounds load (about 250 KB).
 
 ## Run locally
 
@@ -36,4 +37,4 @@ Then open http://localhost:8765. GPS needs HTTPS, so for real driving use the Gi
 
 ## Credits
 
-The engine and exhaust sounds come from recordings on [Wikimedia Commons](https://commons.wikimedia.org/) under CC BY 3.0, by Neighborhood Car Reviews, CARSMANIA, Luxury Cars Videos and FiExhaust. Each file is linked from the ⓘ button in the app. GhostRev isn't affiliated with any car maker.
+The engine and exhaust sounds come from recordings on [Wikimedia Commons](https://commons.wikimedia.org/) under CC BY 3.0, by Neighborhood Car Reviews, CARSMANIA and FiExhaust. Each file is linked from the ⓘ button in the app. GhostRev isn't affiliated with any car maker.

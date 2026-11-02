@@ -138,122 +138,102 @@
 
 <script>
 'use strict';
-/* ---------- Engine voice (shared by AudioWorklet and ScriptProcessor fallback) ----------
- * Granular engine from real recordings. Each car's bank holds idle sections and tracked rev
- * sweeps; every firing pulse in it is a pitch mark tagged with the rpm it was recorded at and
- * whether rpm was rising (on throttle) or falling (off throttle). For every firing at the
- * target rpm the voice plays the recorded pulse closest in rpm and load, preferring the next
- * pulse of the same recording so the original texture keeps flowing (no fixed loop).
- * Grains are two source periods long, Hann-windowed, overlap-added at the target period. */
-const DSP_SRC = `
-function makeEngine(sr) {
-  var p = { rpm: 0, load: 0, cut: 0, over: 0, fire: 1, starter: 0, pops: 1, gain: 0 };
-  var rpm = 0, load = 0, cut = 0, over = 0, fire = 1, starter = 0, gain = 0;
-  var buf = null, mPos = null, mF = null, mTag = null, mN = null, ord = null, nm = 0, idleF = 60, idleRpm = 900, last = -1;
-  var HN = new Float32Array(2049); for (var h = 0; h <= 2048; h++) HN[h] = 0.5 - 0.5 * Math.cos(6.283185 * h / 2048);
-  var MAXG = 64, gS = new Float64Array(MAXG), gL = new Int32Array(MAXG), gA = new Int32Array(MAXG), gAmp = new Float32Array(MAXG), ng = 0, next = 0;
-  var pb = null, pOff = [], pLen = 0, pv = [], queue = 0, qWait = 0;
-  var lp = 0, hpx = 0, hpy = 0, stPh = 0, seed = 12345;
-  var sm = 1 - Math.exp(-1 / (sr * 0.04));
-  function rnd() { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 2147483648 - 1; }
-  function r01() { return 0.5 + 0.5 * rnd(); }
-  function pop(g) {
-    if (!pb || pv.length >= 4) return;
-    var o = pOff[(r01() * pOff.length) | 0];
-    pv.push({ pos: o, end: o + pLen, g: g, rate: 0.88 + 0.24 * r01() });
+/* ---------- Engine voice: native Web Audio, no per-sample JavaScript ----------
+ * Each car has steady real loops at fixed rpm points (sounds/<car>.ogg + .json, built offline
+ * from recorded passes through each rpm). All loops play continuously; the two around the
+ * current rpm are equal-power crossfaded and every loop's playbackRate is rpm / loopRpm, so the
+ * pitch glides. Throttle opens a low-pass and raises the level; pops are one-shot recordings.
+ * Every change goes through setTargetAtTime, so nothing ever steps or clicks. */
+function makeEngine(ctx, out) {
+  const p = { rpm:0, load:0, cut:0, over:0, fire:1, starter:0, pops:1, gain:0 };
+  let loops = [], red = 7000, popBuf = null, popKinds = {}, trainEnd = 0;
+  const vol = ctx.createGain(); vol.gain.value = 0; vol.connect(out);
+  const lvl = ctx.createGain(); lvl.gain.value = 0;
+  const tone = ctx.createBiquadFilter(); tone.type = 'lowpass'; tone.Q.value = 0.6; tone.frequency.value = 2000;
+  const sat = ctx.createWaveShaper(), cv = new Float32Array(1024);
+  for (let i = 0; i < 1024; i++) { const x = i / 511.5 - 1; cv[i] = Math.tanh(1.8 * x) / Math.tanh(1.8); }
+  sat.curve = cv;
+  const bus = ctx.createGain(); bus.gain.value = 0.9;
+  bus.connect(tone).connect(sat).connect(lvl).connect(vol);
+  const popBus = ctx.createGain(); popBus.gain.value = 0.8; popBus.connect(vol);
+  // starter motor: geared whir that sags on every compression stroke (~14 Hz while cranking)
+  const st = ctx.createOscillator(), stF = ctx.createBiquadFilter(), stG = ctx.createGain(), lfo = ctx.createOscillator(), lfoA = ctx.createGain(), lfoF = ctx.createGain();
+  st.type = 'triangle'; st.frequency.value = 230; stF.type = 'bandpass'; stF.frequency.value = 650; stF.Q.value = 0.9; stG.gain.value = 0;
+  lfo.frequency.value = 14; lfoA.gain.value = 0; lfoF.gain.value = 30;
+  lfo.connect(lfoA).connect(stG.gain); lfo.connect(lfoF).connect(st.frequency);
+  st.connect(stF).connect(stG).connect(vol); st.start(); lfo.start();
+  const T = (param, v, tau) => param.setTargetAtTime(v, ctx.currentTime, tau);
+  function pop(kind, g, delay = 0) {
+    const list = popKinds[kind]; if (!popBuf || !list) return 0;
+    const [, off, len] = list[(Math.random() * list.length) | 0];
+    const s = ctx.createBufferSource(), pg = ctx.createGain();
+    s.buffer = popBuf; s.playbackRate.value = 0.92 + 0.16 * Math.random(); pg.gain.value = g;
+    s.connect(pg).connect(popBus);
+    s.start(ctx.currentTime + delay, off, len);
+    return len;
   }
-  function pick(ft, lt) {
-    var c = last + 1;
-    // keep reading the same recording while it still matches
-    if (last >= 0 && c < nm && mPos[c] - mPos[last] < 2.5 * sr / mF[last] &&
-        Math.abs(Math.log(mF[c] / ft)) < 0.04 && Math.abs(mTag[c] - lt) < 0.75) return c;
-    var lo = 0, hi = nm - 1;
-    while (lo < hi) { var mid = (lo + hi) >> 1; if (mF[ord[mid]] < ft) lo = mid + 1; else hi = mid; }
-    var best = ord[lo], bs = 1e9;
-    for (var j = Math.max(0, lo - 12); j <= Math.min(nm - 1, lo + 12); j++) {
-      var m = ord[j], s = Math.abs(Math.log(mF[m] / ft)) * 25 + Math.abs(mTag[m] - lt) * 0.8 + r01() * 0.3;
-      if (s < bs) { bs = s; best = m; }
+  // overrun: a real recorded crackle sequence, then a pause before the next one
+  function train(intensity) {
+    const list = popKinds.t; if (!popBuf || !list) return;
+    const len = pop('t', 0.45 + 0.55 * intensity * (0.6 + 0.4 * Math.random()));
+    trainEnd = ctx.currentTime + len + 0.15 + Math.random() * 0.6;
+  }
+  function apply() {
+    const rpm = Math.max(p.rpm, 1);
+    if (loops.length) {
+      // the two loops around rpm; below the lowest loop it just slows down (cranking chug)
+      let k = 0; while (k < loops.length - 1 && loops[k + 1].rpm <= rpm) k++;
+      const a = loops[k], b = loops[Math.min(k + 1, loops.length - 1)];
+      const x = a === b || rpm <= a.rpm ? 0 : Math.min(1, Math.log(rpm / a.rpm) / Math.log(b.rpm / a.rpm));
+      for (const l of loops) {
+        T(l.src.playbackRate, Math.min(4, Math.max(0.05, rpm / l.rpm)), 0.03);
+        T(l.g.gain, l === a ? Math.cos(x * Math.PI / 2) : l === b ? Math.sin(x * Math.PI / 2) : 0, 0.06);
+      }
     }
-    return best;
+    T(tone.frequency, (700 + 6000 * p.load + rpm * 0.5) * (0.35 + 0.65 * p.fire), 0.05);
+    const on = p.rpm > 30 ? 1 : 0;
+    T(lvl.gain, on * (0.55 + 0.45 * p.load) * (0.75 + 0.35 * Math.min(1, rpm / red)) * (1 - 0.45 * p.cut) * (0.3 + 0.7 * p.fire), p.cut ? 0.012 : 0.05);
+    T(vol.gain, p.gain, 0.08);
+    T(stG.gain, p.starter * 0.035, 0.05); T(lfoA.gain, p.starter * 0.025, 0.05);
+    // overrun: unburnt fuel lights off in the hot exhaust, more often at high rpm
+    if (p.pops && p.over > 0.12 && ctx.currentTime > trainEnd && Math.random() < (0.03 + 0.12 * p.over) * Math.min(1.5, rpm / 3500)) train(p.over);
   }
   return {
-    set: function (m) {
-      if (m.bank) {
-        buf = m.bank; mPos = m.mPos; mF = m.mF; mTag = m.mTag; mN = m.mN; nm = mF.length; idleF = m.idleF; idleRpm = m.idleRpm;
-        ord = new Int32Array(nm); for (var i = 0; i < nm; i++) ord[i] = i;
-        ord.sort(function (a, b) { return mF[a] - mF[b]; });
-        ng = 0; last = -1; next = 0;
-      }
-      if (m.popBuf) { pb = m.popBuf; pOff = m.popOffs.map(function (o) { return Math.round(o * sr); }); pLen = Math.round(m.popLen * sr); }
-      if (m.bang) { queue += m.bang; qWait = 0; }
-      for (var k in m) if (k !== 'bank' && k !== 'mPos' && k !== 'mF' && k !== 'mTag' && k !== 'mN' && k !== 'popBuf' && k !== 'bang') p[k] = m[k];
+    setCar(buf, meta, carRed) {
+      red = carRed;
+      for (const l of loops) { T(l.g.gain, 0, 0.05); l.src.stop(ctx.currentTime + 0.4); }
+      loops = meta.map(m => {
+        const src = ctx.createBufferSource(), g = ctx.createGain();
+        src.buffer = buf; src.loop = true; src.loopStart = m.start; src.loopEnd = m.start + m.len; g.gain.value = 0;
+        src.connect(g).connect(bus);
+        src.start(0, m.start + Math.random() * m.len);
+        return { rpm:m.rpm, src, g };
+      });
+      apply();
     },
-    render: function (L, R, n) {
-      for (var i = 0; i < n; i++) {
-        rpm += (p.rpm - rpm) * sm; load += (p.load - load) * sm; over += (p.over - over) * sm;
-        cut += (p.cut - cut) * 0.01; fire += (p.fire - fire) * 0.002; starter += (p.starter - starter) * 0.001; gain += (p.gain - gain) * 0.0006;
-        var x = 0;
-        if (buf && rpm > 30) {
-          var ft = idleF * rpm / idleRpm, Pt = sr / ft;
-          if (next > Pt) next = Pt;             // rpm rose: don't wait out a slot scheduled at low rpm
-          if (--next <= 0) {
-            next += Pt * (1 + 0.015 * rnd());
-            var mk = pick(ft, over > 0.25 ? 0 : load > 0.55 ? 1 : 0.3); last = mk;
-            var Ps = sr / mF[mk];
-            if (ng < MAXG) {
-              gS[ng] = mPos[mk] - Ps; gL[ng] = Math.round(2 * Ps); gA[ng] = 0;
-              gAmp[ng] = mN[mk] * Math.sqrt(Math.min(Pt, 2 * Ps) / Ps) * (1 + 0.06 * rnd()) * (1 - 0.45 * cut) * (0.75 + 0.4 * load) * (0.3 + 0.7 * fire);
-              ng++;
-            }
-            // overrun: unburnt fuel lights off in the hot exhaust, more often at high rpm
-            if (p.pops && over > 0.12 && r01() < (0.012 + 0.08 * over) * Math.min(1.5, rpm / 3500)) pop(0.3 + 0.7 * over * r01());
-          }
-          for (var g = 0; g < ng; g++) {
-            var a = gA[g];
-            x += buf[(gS[g] + a) | 0] * HN[(a * 2048 / gL[g]) | 0] * gAmp[g];
-            if (++gA[g] >= gL[g]) { ng--; gS[g] = gS[ng]; gL[g] = gL[ng]; gA[g] = gA[ng]; gAmp[g] = gAmp[ng]; g--; }
-          }
-        }
-        // starter motor whine
-        if (starter > 0.001) { stPh += (150 + 40 * Math.sin(stPh * 0.02)) / sr; x += ((stPh % 1) * 2 - 1 + 0.5 * rnd()) * 0.06 * starter; }
-        // recordings already carry the load character; this only opens the tone a little on throttle
-        var fc = (1500 + 6000 * load + rpm * 0.5) * (0.35 + 0.65 * fire), c = 1 - Math.exp(-6.283 * fc / sr);
-        lp += (x - lp) * c;
-        var y = Math.tanh((lp * (1 - 0.35 * load) + x * 0.35 * load) * (1.1 + 0.6 * load));
-        if (queue > 0 && --qWait <= 0) { if (p.pops) pop(0.75 + 0.25 * r01()); queue--; qWait = sr * (0.04 + 0.05 * r01()); }
-        for (var v = 0; v < pv.length; v++) {
-          var s = pv[v], j = s.pos | 0, f = s.pos - j;
-          y += (pb[j] * (1 - f) + pb[j + 1] * f) * s.g * 0.9;
-          s.pos += s.rate; if (s.pos >= s.end - 1) { pv.splice(v, 1); v--; }
-        }
-        hpy = y - hpx + 0.996 * hpy; hpx = y;
-        var o = hpy * gain * 0.8;
-        L[i] = o; R[i] = o;
-      }
+    setPops(buf, kinds) { popBuf = buf; popKinds = {}; for (const k of kinds) (popKinds[k[0]] = popKinds[k[0]] || []).push(k); },
+    set(m) {
+      // full-throttle upshift: one bang, then a crackle or two
+      if (m.bang && p.pops) { pop('s', 0.9); if (m.bang > 1) pop('t', 0.5, 0.05); }
+      for (const k in m) if (k !== 'bang') p[k] = m[k];
+      apply();
     }
   };
-}`;
-const WORKLET_SRC = DSP_SRC + `
-class EngineProc extends AudioWorkletProcessor {
-  constructor() { super(); this.e = makeEngine(sampleRate); this.port.onmessage = (ev) => this.e.set(ev.data); }
-  process(_, outs) { const o = outs[0]; this.e.render(o[0], o[1] || o[0], o[0].length); return true; }
 }
-registerProcessor('engine', EngineProc);`;
 
-/* ---------- Cars (sound banks in sounds/<id>.ogg + .json) ---------- */
+/* ---------- Cars (rpm loops in sounds/<id>.ogg + .json) ---------- */
 const CARS = [
   { id:'v8',  name:'V8',         idle:925,  red:7000, gears:[2.97,2.07,1.43,1.0,0.71,0.57],          final:3.42, power:4.4,
     credit:{ t:'Chevrolet Corvette C6 Z06 - engine and exhaust sound', a:'Neighborhood Car Reviews (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Chevrolet_Corvette_C6_Z06_-_engine_and_exhaust_sound_(YouTube_N3I-54kjT7I).opus' } },
   { id:'f6',  name:'Flat-6',     idle:864,  red:9000, gears:[3.75,2.38,1.72,1.34,1.11,0.96,0.84],     final:4.47, power:5.0,
     credit:{ t:'Porsche 911 GT3 (992) with Fi Exhaust - engine and exhaust sound', a:'CARSMANIA (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Porsche_911_GT3_(992)_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_-ZK8A1PT-4k).opus' } },
-  { id:'v12', name:'V12',        idle:1015, red:8700, gears:[3.08,2.19,1.63,1.29,1.03,0.84,0.69],     final:4.18, power:5.4,
-    credit:{ t:'Ferrari F12 berlinetta - engine and exhaust sound', a:'Luxury Cars Videos (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Ferrari_F12_berlinetta_-_engine_and_exhaust_sound_(YouTube_YGefdcd6d80).opus' } },
   { id:'i4',  name:'Turbo 4',    idle:828,  red:7200, gears:[3.87,2.47,1.65,1.21,1.0,0.83,0.68,0.56], final:3.47, power:4.2,
     credit:{ t:'Mercedes-Benz A 45 S AMG (W177) with Fi Exhaust - engine and exhaust sound', a:'FiExhaust (YouTube)', u:'https://commons.wikimedia.org/wiki/File:Mercedes-Benz_A_45_S_AMG_(W177)_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_K6CgMnEOjzs).opus' } },
 ];
-// sounds/pops.ogg: 14 single pops cut from the V8, V12 and M5 recordings, 0.16 s each, 0.18 s apart
-const POPS = { offs:[0,0.18,0.36,0.54,0.72,0.9,1.08,1.26,1.44,1.62,1.8,1.98,2.16,2.34], len:0.16,
-  extraCredit:{ t:'BMW M5 Competition with Fi Exhaust - engine and exhaust sound (exhaust pops)', a:'FiExhaust (YouTube)', u:'https://commons.wikimedia.org/wiki/File:BMW_M5_Competition_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_KrTDWpk8WDc).opus' } };
+// sounds/pops.ogg: real overrun crackle cut from recordings [kind, start s, length s];
+// t = crackle sequence (2-7 pops, original timing), s = single bang
+const POPS = [["t",0,0.432],["t",0.482,0.532],["t",1.064,0.292],["t",1.406,0.432],["t",1.888,0.472],["t",2.41,0.992],["t",3.452,0.632],["t",4.134,0.702],["t",4.886,0.402],["t",5.338,0.552],["t",5.94,0.512],["t",6.502,0.332],["t",6.884,0.972],["t",7.906,0.332],["t",8.288,0.532],["t",8.87,0.332],["t",9.252,0.292],["t",9.594,0.382],["s",10.026,0.142],["s",10.218,0.142],["s",10.41,0.142],["s",10.602,0.142],["s",10.794,0.142],["s",10.986,0.142],["s",11.178,0.142],["s",11.37,0.142],["s",11.562,0.142],["s",11.754,0.142]];
+const POP_CREDITS = [{"t": "BMW M3 Competition with Fi Exhaust - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:BMW_M3_Competition_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_kUIorGHpeVg).opus"}, {"t": "McLaren 570S with Fi Exhaust system - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:McLaren_570S_with_Fi_Exhaust_system_-_engine_and_exhaust_sound_(YouTube_dBRIVYIzRm4).opus"}, {"t": "Porsche Macan GTS with Fi Exhaust system - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Porsche_Macan_GTS_with_Fi_Exhaust_system_-_engine_and_exhaust_sound_(YouTube_N4Tbm-bEowk).opus"}];
 const TIRE = 2.05;            // m per wheel revolution
 const AMBIENT = 18, HOT = 90; // °C coolant
 
@@ -266,7 +246,7 @@ let mode = 'gps', mph = store.get('mph', false), pops = store.get('pops', true);
 let ctx = null, node = null, eng = null, wake = null, timer = null;
 // phase: off → check → crank → catch → run → stopping → off
 let phase = 'off', phaseT = 0;
-const veh = { v:0, gear:1, pendG:1, pendT:0, style:0.2, rpm:0, thr:0, brake:0, neutral:false, over:0, liftT:0, cut:0, shiftT:0, cutUntil:0, blipUntil:0, temp:AMBIENT, hunt:0 };
+const veh = { v:0, aS:0, gear:1, pendG:1, pendT:0, style:0.2, rpm:0, thr:0, brake:0, neutral:false, over:0, liftT:0, cut:0, shiftT:0, cutUntil:0, blipUntil:0, temp:AMBIENT, hunt:0 };
 const pedal = { gas:false, brk:false };
 const running = () => phase !== 'off';
 
@@ -280,28 +260,62 @@ const warmth = () => clamp((veh.temp - AMBIENT) / (70 - AMBIENT), 0, 1);
 // BMW M style: a cold engine gets a lower limit that rises as it warms
 const effRed = () => Math.round((car.red - (1 - warmth()) * 0.32 * (car.red - car.idle)) / 250) * 250;
 
-/* ---------- GPS: speed + acceleration, extrapolated between fixes ---------- */
-const gps = { id:null, fixes:[], v:0, a:0, t:0, last:null, dist:0, alts:[], grade:0, hdg:null, latA:0 };
+/* ---------- GPS: noisy fixes -> smooth speed and acceleration ----------
+ * The Tesla browser sends ~10 fixes/s, often without coords.speed. Speed is then the slope of
+ * position (east/north metres) over ~1.5 s: noise averages out. Summing fix-to-fix distances
+ * would not work: jitter always adds path length, so a parked car would "drive" at 15+ km/h.
+ * An alpha-beta filter tracks speed and acceleration on the fix timestamps; between fixes the
+ * speed is predicted, and the drivetrain follows the prediction smoothly so corrections never snap. */
+const gps = { id:null, hist:[], last:null, org:null, dist:0, v:0, a:0, tFix:0, moving:false, startT:0, alts:[], grade:0, hdg:null, latA:0 };
 function gpsStart() {
   if (!('geolocation' in navigator)) return status('No GPS · use test mode', true);
   gps.id = navigator.geolocation.watchPosition(onFix, (e) => status('Location: ' + e.message, true),
     { enableHighAccuracy:true, maximumAge:0, timeout:10000 });
 }
-function gpsStop() { if (gps.id !== null) navigator.geolocation.clearWatch(gps.id); gps.id = null; gps.fixes = []; gps.last = null; gps.t = 0; gps.v = 0; gps.a = 0; gps.alts = []; gps.grade = 0; gps.hdg = null; gps.latA = 0; }
+function gpsStop() {
+  if (gps.id !== null) navigator.geolocation.clearWatch(gps.id);
+  Object.assign(gps, { id:null, hist:[], last:null, org:null, v:0, a:0, tFix:0, moving:false, startT:0, alts:[], grade:0, hdg:null, latA:0 });
+}
 function onFix(pos) {
-  const c = pos.coords, t = performance.now();
-  let v = c.speed;
-  if (v == null || isNaN(v)) {
-    if (gps.last) {
-      const dt = (pos.timestamp - gps.last.ts) / 1000;
-      v = dt > 0.05 ? hav(gps.last.lat, gps.last.lon, c.latitude, c.longitude) / dt : gps.v;
-    } else v = 0;
+  const c = pos.coords, t = pos.timestamp / 1000;
+  if (gps.last && t - gps.last.t < 0.05) return;                 // duplicate fix / burst
+  const dtF = gps.last ? t - gps.last.t : 0;
+  const d = gps.last ? hav(gps.last.lat, gps.last.lon, c.latitude, c.longitude) : 0;
+  if (dtF && d / dtF > 90) return;                               // position jump: ignore this fix
+  gps.last = { lat:c.latitude, lon:c.longitude, t };
+  if (!gps.org) gps.org = { lat:c.latitude, lon:c.longitude, k:Math.cos(c.latitude * Math.PI / 180) };
+  const x = (c.longitude - gps.org.lon) * 111320 * gps.org.k, y = (c.latitude - gps.org.lat) * 110540;
+  const sp = c.speed != null && !isNaN(c.speed) && c.speed >= 0 ? c.speed : null;
+  gps.hist.push({ t, x, y });
+  while (gps.hist.length > 3 && t - gps.hist[0].t > 3) gps.hist.shift();
+  // measured speed: Doppler speed when the browser gives one, else distance/time slope over ~1.5 s
+  let z = 0;
+  if (sp != null) z = sp;
+  else {
+    const H = gps.hist; let i = H.length - 1;
+    while (i > 0 && (t - H[i - 1].t <= 1.5 || H.length - i < 3)) i--;
+    const W = H.slice(i), n = W.length;
+    if (n >= 2) { let st=0, stt=0, sx=0, sy=0, stx=0, sty=0;
+      for (const q of W) { const u = q.t - t; st+=u; stt+=u*u; sx+=q.x; sy+=q.y; stx+=u*q.x; sty+=u*q.y; }
+      const den = n*stt - st*st;
+      z = den > 1e-9 ? Math.hypot((n*stx - st*sx) / den, (n*sty - st*sy) / den) : 0; }
   }
-  const fdt = gps.last ? (pos.timestamp - gps.last.ts) / 1000 : 0;
-  gps.last = { lat:c.latitude, lon:c.longitude, ts:pos.timestamp };
-  if (v < 0.4) v = 0;
+  // alpha-beta filter; ~1 fix/s (phones) trusts each fix more than ~10 fixes/s
+  if (!gps.tFix) { gps.v = z; gps.a = 0; }
+  else {
+    const dt = clamp(dtF, 0.05, 2), slow = dt > 0.5, vp = Math.max(0, gps.v + gps.a * dt), r = z - vp;
+    gps.v = Math.max(0, vp + (slow ? 0.6 : 0.3) * r);
+    gps.a = clamp(gps.a + (slow ? 0.25 : 0.06) * r / dt, -9, 6);
+  }
+  // standstill with hysteresis: parked GPS drift must not creep the car forward
+  if (gps.v < 0.4) { gps.moving = false; gps.startT = 0; }
+  else if (!gps.moving && gps.v > 0.9) { if (!gps.startT) gps.startT = t; if (t - gps.startT > 0.8) gps.moving = true; }
+  else if (!gps.moving) gps.startT = 0;
+  if (!gps.moving) gps.a *= 0.5;
+  gps.tFix = performance.now();
+  const v = gps.moving ? gps.v : 0;
+  if (dtF < 3) gps.dist += v * dtF;                              // distance driven, for the grade fit
   // road grade: altitude against distance travelled, fitted over the last ~150 m (GPS altitude is noisy up close)
-  if (fdt > 0 && fdt < 3) gps.dist += v * fdt;
   if (c.altitude != null && v > 2 && (c.altitudeAccuracy == null || c.altitudeAccuracy < 20)) {
     gps.alts.push([gps.dist, c.altitude]);
     while (gps.alts.length > 2 && gps.dist - gps.alts[0][0] > 150) gps.alts.shift();
@@ -314,23 +328,20 @@ function onFix(pos) {
   }
   // cornering: yaw rate from heading changes × speed = lateral acceleration
   if (c.heading != null && !isNaN(c.heading) && v > 3) {
-    if (gps.hdg != null && fdt > 0 && fdt < 3) {
+    if (gps.hdg != null && dtF > 0 && dtF < 3) {
       let dh = c.heading - gps.hdg; if (dh > 180) dh -= 360; if (dh < -180) dh += 360;
-      gps.latA += (clamp(v * dh * Math.PI / 180 / fdt, -9, 9) - gps.latA) * 0.5;
+      gps.latA += (clamp(v * dh * Math.PI / 180 / dtF, -9, 9) - gps.latA) * 0.3;
     }
     gps.hdg = c.heading;
   } else if (v <= 3) { gps.hdg = null; gps.latA *= 0.5; }
-  gps.fixes.push({ t, v });
-  while (gps.fixes.length > 2 && t - gps.fixes[0].t > 1500) gps.fixes.shift();
-  // least-squares slope = acceleration; clamp physically impossible spikes from GPS jumps
-  const f = gps.fixes, n = f.length;
-  if (n >= 2) {
-    let st=0, sv=0, stt=0, stv=0;
-    for (const p of f) { const x=(p.t-t)/1000; st+=x; sv+=p.v; stt+=x*x; stv+=x*p.v; }
-    const d = n*stt - st*st; gps.a = clamp(d > 1e-6 ? (n*stv - st*sv) / d : 0, -10, 8);
-  }
-  gps.v = v; gps.t = t;
   status(`GPS ±${Math.round(c.accuracy)} m`);
+}
+// predicted speed now: filter state + acceleration since the last fix (held after 1 s, relaxed after 3 s)
+function gpsSpeed(now) {
+  if (!gps.tFix || !gps.moving) return 0;
+  const age = (now - gps.tFix) / 1000;
+  if (age > 3) gps.a *= 0.98;
+  return Math.max(0, gps.v + gps.a * Math.min(age, 1));
 }
 function hav(a1,o1,a2,o2){ const r=Math.PI/180, dA=(a2-a1)*r, dO=(o2-o1)*r;
   const h=Math.sin(dA/2)**2+Math.cos(a1*r)*Math.cos(a2*r)*Math.sin(dO/2)**2; return 12742000*Math.asin(Math.min(1,Math.sqrt(h))); }
@@ -342,10 +353,11 @@ function step(dt, now) {
   let thr, over = 0;
   const red = effRed();
   if (mode === 'gps') {
-    const age = (now - gps.t) / 1000;
-    if (gps.t && age > 3) gps.a *= Math.exp(-dt);              // signal lost (tunnel): hold speed, relax the throttle
-    veh.v = gps.t ? Math.max(0, gps.v + gps.a * Math.min(age, 1.2)) : 0;
-    const a = gps.a;
+    const vp = gpsSpeed(now);
+    veh.v += (vp - veh.v) * Math.min(1, dt / 0.3);            // follow the prediction; fix corrections never snap
+    if (vp === 0 && veh.v < 0.3) veh.v = 0;
+    veh.aS += ((gps.moving ? gps.a : 0) - veh.aS) * Math.min(1, dt / 0.4);
+    const a = veh.aS;
     // throttle needed = rolling/air drag + acceleration + climbing + tyre scrub in corners
     // acceleration is scaled to what this car can do flat out, so a gentle 1 m/s² is part throttle
     const need = 0.06 + veh.v / 90 + a / (car.power * 1.1) + gps.grade * 2.5 + Math.abs(gps.latA) * 0.03;
@@ -393,7 +405,7 @@ function step(dt, now) {
   // after a downshift the new gear must sit well below the next upshift (ratio steps are ~1.3–1.5×)
   up = Math.min(red - 100, Math.max(up, down * 1.7));
   // slowing down (braking, coasting) never upshifts
-  const slowing = gpsMode ? gps.a < -0.4 : pedal.brk || (demand < 0.05 && veh.v > 2);
+  const slowing = gpsMode ? veh.aS < -0.4 : pedal.brk || (demand < 0.05 && veh.v > 2);
   const r = (g) => wheelRpm(veh.v, g);
   let want = veh.gear;
   if (veh.v < 0.5) want = 1;
@@ -477,40 +489,27 @@ function chime() {
 }
 
 /* ---------- Audio: files are fetched once (prefetched for the selected car) and decoded on demand ---------- */
-const files = new Map(), banks = new Map();
+const files = new Map(), decoded = new Map();
 const get = (url, type) => { if (!files.has(url)) files.set(url, fetch(url).then(r => { if (!r.ok) throw new Error(r.status + ' ' + url); return type === 'json' ? r.json() : r.arrayBuffer(); })); return files.get(url); };
 function prefetch(c) { get(`sounds/${c.id}.ogg`).catch(() => {}); get(`sounds/${c.id}.json`, 'json').catch(() => {}); }
+let engine = null;
 async function loadCar(c) {
-  if (!banks.has(c.id)) {
+  if (!decoded.has(c.id)) {
     const [ab, meta] = await Promise.all([get(`sounds/${c.id}.ogg`), get(`sounds/${c.id}.json`, 'json')]);
-    const data = (await ctx.decodeAudioData(ab.slice(0))).getChannelData(0), k = ctx.sampleRate / meta.sr, n = meta.marks.length;
-    const mPos = new Float64Array(n), mF = new Float32Array(n), mTag = new Float32Array(n), mN = new Float32Array(n);
-    // level-match grains (partially, so the recording's own swell survives): no volume jumps when grains change source
-    const med = meta.marks.map(m => m[3]).sort((a, b) => a - b)[n >> 1];
-    meta.marks.forEach(([p, f, t, r], i) => { mPos[i] = p * k; mF[i] = f / 10; mTag[i] = t; mN[i] = Math.min(2.5, Math.pow(med / r, 0.65)); });
-    banks.set(c.id, { data, mPos, mF, mTag, mN, idleF:meta.idleF });
+    decoded.set(c.id, { buf: await ctx.decodeAudioData(ab.slice(0)), loops: meta.loops });
   }
-  const b = banks.get(c.id);
-  eng({ bank:b.data.slice(), mPos:b.mPos.slice(), mF:b.mF.slice(), mTag:b.mTag.slice(), mN:b.mN.slice(), idleF:b.idleF, idleRpm:c.idle });
+  const d = decoded.get(c.id);
+  engine.setCar(d.buf, d.loops, c.red);
 }
 async function audioStart() {
   ctx = new (window.AudioContext || window.webkitAudioContext)({ latencyHint:'playback' });
-  if (ctx.audioWorklet) {
-    await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([WORKLET_SRC], { type:'application/javascript' })));
-    node = new AudioWorkletNode(ctx, 'engine', { outputChannelCount:[2] });
-    eng = (m) => node.port.postMessage(m, m.bank ? [m.bank.buffer, m.mPos.buffer, m.mF.buffer, m.mTag.buffer, m.mN.buffer] : m.popBuf ? [m.popBuf.buffer] : []);
-  } else {
-    const e = new Function(DSP_SRC + ';return makeEngine;')()(ctx.sampleRate);
-    node = ctx.createScriptProcessor(2048, 0, 2);
-    node.onaudioprocess = (ev) => { const b = ev.outputBuffer; e.render(b.getChannelData(0), b.getChannelData(1), b.length); };
-    eng = (m) => e.set(m);
-  }
   const comp = ctx.createDynamicsCompressor();
-  comp.threshold.value = -10; comp.ratio.value = 4; comp.attack.value = 0.002;
-  node.connect(comp).connect(ctx.destination);
+  comp.threshold.value = -10; comp.ratio.value = 4; comp.attack.value = 0.003;
+  comp.connect(ctx.destination);
+  engine = makeEngine(ctx, comp); eng = (m) => engine.set(m);
   if (ctx.state === 'suspended') await ctx.resume();
   get('sounds/pops.ogg').then(ab => ctx.decodeAudioData(ab.slice(0)))
-    .then(d => eng({ popBuf:new Float32Array(d.getChannelData(0)), popOffs:POPS.offs, popLen:POPS.len }))
+    .then(b => engine.setPops(b, POPS))
     .catch(() => status('Crackle sounds missing', true));
 }
 function sendVol() { const v = $('vol').value / 100; eng && eng({ gain: running() ? v * v * 1.2 : 0 }); }
@@ -528,7 +527,8 @@ function tick() {
   if (now - saveT > 5000) { saveT = now; store.set('temp', { t:veh.temp, at:Date.now() }); }
 }
 function timerStart() { lastT = performance.now(); clearInterval(timer); timer = setInterval(tick, 20); }
-function frame() { draw(); if (running()) requestAnimationFrame(frame); }
+let lastDraw = 0;
+function frame(now) { if (!(now - lastDraw < 32)) { lastDraw = now; draw(); } if (running()) requestAnimationFrame(frame); }
 
 /* ---------- Cluster: SVG dial faces redrawn only when the scale changes; needles move by CSS transform ---------- */
 const A0 = -135, SWEEP = 270; // needle angle from 12 o'clock, clockwise
@@ -624,7 +624,7 @@ function renderCars() {
   $('cars').innerHTML = CARS.map(c => `<button data-id="${c.id}" class="${c === car ? 'on' : ''}">${c.name}</button>`).join('');
   $('carname').textContent = `${car.name} · ${(car.red / 1000).toFixed(1)}k`;
 }
-$('credlist').innerHTML = [...CARS.map(c => [c.name, c.credit]), ['Exhaust pops', POPS.extraCredit]]
+$('credlist').innerHTML = [...CARS.map(c => [c.name, c.credit]), ...POP_CREDITS.map(c => ['Crackle', c])]
   .map(([n, c]) => `<li>${n}: <a href="${c.u}" target="_blank" rel="noopener">${c.t}</a>, by ${c.a}, CC BY 3.0</li>`).join('');
 $('info').onclick = () => $('credits').showModal();
 $('cars').addEventListener('click', async (e) => {
