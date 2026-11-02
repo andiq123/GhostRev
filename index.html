@@ -245,6 +245,8 @@ const CARS = [
 ];
 // sounds/pops.ogg: real overrun crackle sequences cut from recordings (2-7 pops, original timing) [kind, start s, length s]
 const POPS = [["t",0,0.48],["t",0.53,0.58],["t",1.16,0.34],["t",1.55,0.48],["t",2.08,0.52],["t",2.65,1.04],["t",3.74,0.68],["t",4.47,0.75],["t",5.27,0.45],["t",5.77,0.6],["t",6.42,0.56],["t",7.03,0.38],["t",7.46,1.02],["t",8.53,0.38],["t",8.96,0.58],["t",9.59,0.38],["t",10.02,0.34],["t",10.41,0.43]];
+// full-throttle recordings used for the mid/high rpm loops
+const LOOP_CREDITS = [["Flat-6", {"t": "Porsche 911 GT3 (997) - engine and exhaust sound", "a": "ProRallyVids (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Porsche_911_GT3_(997)_-_engine_and_exhaust_sound_(YouTube_3WHXKH_Ouc).opus"}], ["Flat-6", {"t": "Porsche 911 GT3 (997) - engine and exhaust sound", "a": "CARSMANIA (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Porsche_911_GT3_(997)_-_engine_and_exhaust_sound_(YouTube_Eh89UkPfUfA).opus"}], ["Turbo 4", {"t": "Mitsubishi Lancer Evolution VI - engine and exhaust sound", "a": "prone (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Mitsubishi_Lancer_Evolution_VI_-_engine_and_exhaust_sound_(YouTube_p2UANOqploM).opus"}], ["Turbo 4", {"t": "Volkswagen Golf GTI - engine and exhaust sound", "a": "9000 Giri \u2022 Elaborazioni Auto Sportive (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Volkswagen_Golf_GTI_-_engine_and_exhaust_sound_(YouTube_NrA1GgbjFRg).opus"}]];
 const POP_CREDITS = [{"t": "BMW M3 Competition with Fi Exhaust - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:BMW_M3_Competition_with_Fi_Exhaust_-_engine_and_exhaust_sound_(YouTube_kUIorGHpeVg).opus"}, {"t": "McLaren 570S with Fi Exhaust system - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:McLaren_570S_with_Fi_Exhaust_system_-_engine_and_exhaust_sound_(YouTube_dBRIVYIzRm4).opus"}, {"t": "Porsche Macan GTS with Fi Exhaust system - engine and exhaust sound", "a": "FiExhaust (YouTube)", "u": "https://commons.wikimedia.org/wiki/File:Porsche_Macan_GTS_with_Fi_Exhaust_system_-_engine_and_exhaust_sound_(YouTube_N4Tbm-bEowk).opus"}];
 const TIRE = 2.05;            // m per wheel revolution
 const AMBIENT = 18, HOT = 90; // °C coolant
@@ -636,7 +638,7 @@ function renderCars() {
   $('cars').innerHTML = CARS.map(c => `<button data-id="${c.id}" class="${c === car ? 'on' : ''}">${c.name}</button>`).join('');
   $('carname').textContent = `${car.name} · ${(car.red / 1000).toFixed(1)}k`;
 }
-$('credlist').innerHTML = [...CARS.map(c => [c.name, c.credit]), ...POP_CREDITS.map(c => ['Crackle', c])]
+$('credlist').innerHTML = [...CARS.map(c => [c.name, c.credit]), ...LOOP_CREDITS, ...POP_CREDITS.map(c => ['Crackle', c])]
   .map(([n, c]) => `<li>${n}: <a href="${c.u}" target="_blank" rel="noopener">${c.t}</a>, by ${c.a}, CC BY 3.0</li>`).join('');
 $('info').onclick = () => $('credits').showModal();
 $('cars').addEventListener('click', async (e) => {
